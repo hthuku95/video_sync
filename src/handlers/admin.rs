@@ -8207,6 +8207,7 @@ pub async fn delivery_progress(
     let mut detail = String::from("Waiting for the render worker…");
     let mut pct: u8 = 5;
     let mut eta_minutes: i64 = 25;
+    let mut eta_overrun = false;
 
     if output_ready || status == "ready" || status == "completed" {
         phase = "completed".into();
@@ -8269,7 +8270,18 @@ pub async fn delivery_progress(
             let anchor = started_at.or(created_at);
             if let Some(s) = anchor {
                 let elapsed_min = (chrono::Utc::now() - s).num_minutes();
-                eta_minutes = std::cmp::max(1, 25 - elapsed_min);
+                // ETA overrun honesty (owner lesson Nov 10 2026): when the
+                // render exceeds its 25-min budget, don't pin "1 minute" for
+                // the rest of time — report the overrun explicitly.
+                let over = elapsed_min >= 25;
+                eta_minutes = if over { 1 } else { std::cmp::max(1, 25 - elapsed_min) };
+                if over {
+                    detail = format!(
+                        "{} Taking longer than usual — the team is on it; you'll see the moment it's ready.",
+                        detail
+                    );
+                }
+                eta_overrun = over;
             }
         }
     }
@@ -8281,6 +8293,7 @@ pub async fn delivery_progress(
         "detail": detail,
         "progress_pct": pct,
         "eta_minutes": eta_minutes,
+        "eta_overrun": eta_overrun,
     });
 
     let want_explain = std::env::var("DELIVERY_EXPLAIN_AGENT")

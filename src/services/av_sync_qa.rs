@@ -46,17 +46,28 @@ pub struct AvSyncReport {
     pub matched: usize,
     pub mismatches: Vec<SegmentVerdict>,
     pub unclear: Vec<SegmentVerdict>,
+    /// Total transcribed speech seconds and their share of the runtime.
+    /// `None` when transcription was skipped. Monica lesson (Nov 10 2026):
+    /// 43% speech density shipped silently — anything under 60% is a fail.
+    pub speech_seconds: f64,
+    pub speech_coverage: Option<f64>,
 }
 
 impl AvSyncReport {
     pub fn ok(&self) -> bool {
-        self.skipped_reason.is_none() && self.mismatches.is_empty()
+        self.skipped_reason.is_none() && self.mismatches.is_empty() && !self.density_fail()
     }
 
-    /// Only a *completed* audit with real mismatches fails the review — a
-    /// skipped audit (no transcriber, too short, etc.) never blocks a video.
+    /// Only a *completed* audit with real mismatches — or speech density below
+    /// the 60% floor — fails the review. A skipped audit (no transcriber, too
+    /// short, etc.) never blocks a video.
     pub fn hard_fail(&self) -> bool {
-        self.skipped_reason.is_none() && !self.mismatches.is_empty()
+        (self.skipped_reason.is_none() && !self.mismatches.is_empty()) || self.density_fail()
+    }
+
+    /// Monica lesson enforcement: speech must cover ≥60% of the runtime.
+    fn density_fail(&self) -> bool {
+        matches!(self.speech_coverage, Some(c) if c < 0.60)
     }
 
     /// Human/agent-readable block appended to the review_video output.
@@ -84,6 +95,16 @@ impl AvSyncReport {
                 u.start, u.end, truncate(&u.detail, 120)
             ));
         }
+        if let Some(cov) = self.speech_coverage {
+            let flag = if cov < 0.60 { "❌ BELOW THE 60% FLOOR" } else { "✅" };
+            out.push_str(&format!(
+                "  • Speech density: {:.0}% of runtime ({:.1}s speech / {:.0}s video) {}\n",
+                cov * 100.0,
+                self.speech_seconds,
+                self.video_duration,
+                flag
+            ));
+        }
         if self.ok() {
             out.push_str("  • ✅ Every checked timestamp shows what the narration is describing.\n");
         }
@@ -92,10 +113,7 @@ impl AvSyncReport {
 
     /// Structured note the agent can act on: only the failing timestamps.
     pub fn retry_hint(&self) -> Option<String> {
-        if self.mismatches.is_empty() {
-            return None;
-        }
-        let items: Vec<String> = self
+        let mut items: Vec<String> = self
             .mismatches
             .iter()
             .map(|m| {
@@ -108,8 +126,27 @@ impl AvSyncReport {
                 )
             })
             .collect();
+        if let Some(cov) = self.speech_coverage {
+            if cov < 0.60 {
+                items.push(format!(
+                    "speech density {:.0}% is below the 60% floor ({:.1}s of {:.0}s) — rewrite the narration denser (≈30-38 words per 15s scene) and re-generate narration",
+                    cov * 100.0,
+                    self.speech_seconds,
+                    self.video_duration
+                ));
+            }
+        }
+        if items.is_empty() {
+            return None;
+        }
+        let lead = if self.mismatches.is_empty() {
+            "Narration density failure"
+        } else {
+            "AV-sync mismatch"
+        };
         Some(format!(
-            "AV-sync mismatch at {} scene(s): {}. Re-render ONLY the HyperFrames scene(s) covering these timestamps so the visuals match the narration at those seconds.",
+            "{} at {} issue(s): {}. Fix ONLY the affected scene(s): re-render the HyperFrames scene covering failing timestamps so visuals match the narration at those seconds.",
+            lead,
             items.len(),
             items.join("; ")
         ))
@@ -137,6 +174,8 @@ pub async fn verify_av_sync(state: &Arc<AppState>, video: &str) -> AvSyncReport 
             matched: 0,
             mismatches: Vec::new(),
             unclear: Vec::new(),
+            speech_seconds: 0.0,
+            speech_coverage: None,
         },
     }
 }
@@ -168,6 +207,8 @@ async fn verify_av_sync_inner(state: &Arc<AppState>, video: &str) -> Result<AvSy
             matched: 0,
             mismatches: Vec::new(),
             unclear: Vec::new(),
+            speech_seconds: 0.0,
+            speech_coverage: None,
         });
     }
 
@@ -220,9 +261,14 @@ async fn verify_av_sync_inner(state: &Arc<AppState>, video: &str) -> Result<AvSy
             matched: 0,
             mismatches: Vec::new(),
             unclear: Vec::new(),
+            speech_seconds: 0.0,
+            speech_coverage: None,
         });
     }
 
+    // Real speech coverage of the final mix, measured from the transcript
+    // (owner's Monica lesson: 43% density shipped silently — enforce ≥60%).
+    let speech_seconds: f64 = segments.iter().map(|s| s.1 - s.0).sum();
     merge_short_segments(&mut segments, MIN_SEGMENT_SECONDS);
     let checked = select_even_subset(&segments, MAX_SEGMENTS_CHECKED);
 
@@ -260,6 +306,8 @@ async fn verify_av_sync_inner(state: &Arc<AppState>, video: &str) -> Result<AvSy
             matched: 0,
             mismatches: Vec::new(),
             unclear: Vec::new(),
+            speech_seconds: 0.0,
+            speech_coverage: None,
         });
     }
 
@@ -321,6 +369,8 @@ async fn verify_av_sync_inner(state: &Arc<AppState>, video: &str) -> Result<AvSy
         matched,
         mismatches,
         unclear,
+        speech_seconds,
+        speech_coverage: Some((speech_seconds / duration).min(1.0)),
     };
 
     // Best-effort cleanup of the temp dir.

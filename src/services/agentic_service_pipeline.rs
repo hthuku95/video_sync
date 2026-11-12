@@ -1164,6 +1164,10 @@ impl AgenticServicePipeline {
 
     fn landing_page_prompt(input: &ServiceInput) -> String {
         let url = input.source_url.as_deref().unwrap_or("");
+        let duration_seconds = input.duration_seconds;
+        // Duration-aware scene budget (owner directive Nov 12 2026): longer
+        // videos need proportionally more scenes, not 4-6 fixed.
+        let scene_count = ((duration_seconds / 22.0).ceil() as i32).clamp(4, 12);
         format!(
             r#"## SERVICE: Business Landing Page Video
 GOAL: Create a polished landing page video for the business at {url} (target ~{duration_seconds}s — can be longer if the content requires it).
@@ -1190,8 +1194,8 @@ Use the extracted content to understand:
 - Call-to-action and target audience
 
 ## MANDATORY TOOL SEQUENCE (NARRATION-FIRST — DO NOT SKIP OR REORDER)
-1. generate_video_script(topic, duration, style, tone) — plan the content using the website info from step 0. The script MUST be split into 4-6 scenes, one short narration line per scene (1-3 sentences). Each scene's plan MUST also name the HyperFrames features it will use (menu: VFX shaders, Slug kinetic typography, d3 charts, GSAP timelines, Lottie, audio-reactive motion, masks, CSS perspective/parallax) — the whole video must use at least 3 distinct features and no two consecutive scenes may use an identical feature set.
-2. generate_narration(lines=[...], voice="Emma", output_file="{output_dir}/narration.mp3", gap_seconds=0.35) — synthesize one audio track and get the exact SCENE_TIMELINE_JSON. This is the clock for the entire video. Call it ONCE with all scene lines. If it errors, fix the arguments and retry once; do NOT fall back to per-line generate_text_to_speech and do NOT call auto_generate_video.
+1. generate_video_script(topic, duration, style, tone) — plan the content using the website info from step 0. The script MUST be split into {scene_count} scenes (≈20-25s each), one short narration line per scene (1-3 sentences). NARRATION DENSITY: for a scene of T seconds its narration must run ~T×0.6 seconds of speech (≈30-38 words per 15s scene). Target 70-85% speech coverage for the whole video — dense but breathable (leave the 0.35s line gaps, a beat after the hook, and a hold on the final CTA; never wall-to-wall talking). Hard floor: coverage below 60% is a quality failure. Each scene's plan MUST also name the HyperFrames features it will use (menu: VFX shaders, Slug kinetic typography, d3 charts, GSAP timelines, Lottie, audio-reactive motion, masks, CSS perspective/parallax) — the whole video must use at least 3 distinct features and no two consecutive scenes may use an identical feature set.
+2. generate_narration(lines=[...], voice="Emma", output_file="{output_dir}/narration.mp3", gap_seconds=0.35) — synthesize one audio track and get the exact SCENE_TIMELINE_JSON. This is the clock for the entire video. Call it ONCE with all scene lines. If it errors, fix the arguments and retry once; do NOT fall back to per-line generate_text_to_speech and do NOT call auto_generate_video. Then SELF-CHECK density from SCENE_TIMELINE_JSON: (sum of scene speech durations ÷ {duration_seconds}) must be ≥ 0.6 (target 0.70–0.85) — if it is lower, rewrite the scene lines denser and re-run generate_narration BEFORE rendering anything.
 3. Render the MAIN VISUAL as ONE hyperframes_render(html, resolution) composition. Build it directly from the returned timeline:
    - Root `data-duration` = the returned total audio duration.
    - Every scene's `data-start` and `data-duration` MUST equal the returned timeline. Scenes tile end-to-end with no gaps or overlaps.
@@ -1294,6 +1298,8 @@ Save as .png or .jpg"#,
 
     fn education_prompt(input: &ServiceInput) -> String {
         let out = format!("outputs/agentic_{}", input.delivery_id);
+        // Duration-aware scene budget (owner directive Nov 12 2026).
+        let scene_count = ((input.duration_seconds / 22.0).ceil() as i32).clamp(4, 12);
         format!(
             r#"## SERVICE: Education Explainer Video
 GOAL: Create a narrated educational video (target ~{duration_seconds}s — can be longer if the content requires it).
@@ -1306,8 +1312,8 @@ Style: {style}
 That tool delegates to another agent and will NOT produce the correct educational video. Render directly.
 
 ## MANDATORY TOOL SEQUENCE (NARRATION-FIRST — DO NOT SKIP OR REORDER)
-1. generate_video_script(topic="{brief}", duration={duration_seconds}, style="{style}", tone="professional"). Split the lesson into 4-6 scenes, one short narration line per scene. Each scene's plan MUST also name the HyperFrames features it will use (menu: VFX shaders, Slug kinetic typography, d3 charts, GSAP timelines, Lottie, audio-reactive motion, masks, CSS perspective/parallax) — the whole lesson must use at least 3 distinct features and no two consecutive scenes may use an identical feature set.
-2. generate_narration(lines=[...], voice="Emma", output_file="{out}/narration.mp3", gap_seconds=0.35) — synthesize the voice track and get the exact SCENE_TIMELINE_JSON. This is the clock for the whole lesson. Call it ONCE with all scene lines. If it errors, fix the arguments and retry once; do NOT fall back to per-line generate_text_to_speech and do NOT call auto_generate_video.
+1. generate_video_script(topic="{brief}", duration={duration_seconds}, style="{style}", tone="professional"). Split the lesson into {scene_count} scenes (≈20-25s each), one short narration line per scene. NARRATION DENSITY: for a scene of T seconds its narration must run ~T×0.6 seconds of speech (≈30-38 words per 15s scene). Target 70-85% speech coverage for the whole video — dense but breathable (leave the 0.35s line gaps, a beat after the hook, and a hold on the final CTA; never wall-to-wall talking). Hard floor: coverage below 60% is a quality failure. Each scene's plan MUST also name the HyperFrames features it will use (menu: VFX shaders, Slug kinetic typography, d3 charts, GSAP timelines, Lottie, audio-reactive motion, masks, CSS perspective/parallax) — the whole lesson must use at least 3 distinct features and no two consecutive scenes may use an identical feature set.
+2. generate_narration(lines=[...], voice="Emma", output_file="{out}/narration.mp3", gap_seconds=0.35) — synthesize the voice track and get the exact SCENE_TIMELINE_JSON. This is the clock for the whole lesson. Call it ONCE with all scene lines. If it errors, fix the arguments and retry once; do NOT fall back to per-line generate_text_to_speech and do NOT call auto_generate_video. Then SELF-CHECK density from SCENE_TIMELINE_JSON: (sum of scene speech durations ÷ {duration_seconds}) must be ≥ 0.6 (target 0.70–0.85) — if it is lower, rewrite the scene lines denser and re-run generate_narration BEFORE rendering anything.
 3. Render each scene to EXACTLY its timeline duration:
    - hyperframes_render(html=..., resolution=...) — for titles, kinetic typography, layouts, animated backgrounds, intro/outro sequences, and ALL 2D/3D motion graphics. You have FULL access to every HyperFrames feature — use them freely and creatively: 50+ cinematic VFX shaders (glitch, film grain, chromatic aberration, bloom, halftone, CRT, etc.), Slug GPU vector typography (word-by-word kinetic reveals), d3 animated charts and data visualizations, a unified 3D scene graph with glTF import and PBR materials, GSAP timelines, Lottie animation playback, audio visualization/reactive motion, transitions, masks, and CSS perspective/parallax. Pick whichever combination best serves the lesson content. Its root data-duration and scene data-start/data-duration MUST equal the timeline. CPU-rendered, no GPU needed. Implement EVERY feature named in each scene's plan — a scene whose HTML ignores its planned features is a quality failure.
    - manim_execute_script(description=..., duration=<scene duration>, quality="h", include_narration=false) — for math equations, diagrams, code animations, data charts, LaTeX formulas. Trim/pad the result with trim_video or pad_video_time so it is exactly the scene duration.
