@@ -22,7 +22,11 @@ COPY . .
 RUN cargo chef prepare --recipe-path recipe.json
 
 FROM chef AS builder
+# Cargo.lock MUST be copied into the builder — chef cook only receives
+# recipe.json otherwise and re-resolves dependencies (the floating-deps bug
+# that broke Nov 13 2026 even after the lock was committed to the repo).
 COPY --from=planner /app/recipe.json recipe.json
+COPY --from=planner /app/Cargo.lock Cargo.lock
 RUN cargo chef cook --release --recipe-path recipe.json
 COPY . .
 RUN cargo build --release
