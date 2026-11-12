@@ -8286,6 +8286,42 @@ pub async fn delivery_progress(
         }
     }
 
+    // Client-visible build plan (owner directive Nov 12 2026): the planner's
+    // committed step count tells the customer their video is being built to a
+    // concrete plan, not improvised.
+    let mut plan_steps: Option<usize> = None;
+    if phase != "completed" && phase != "failed" {
+        if let Some(wid) = &workflow_id {
+            let ev = sqlx::query_as::<_, (Option<serde_json::Value>,)>(
+                "SELECT details FROM app_workflow_events \
+                 WHERE workflow_id = $1 AND event_type = 'execution_plan' \
+                 ORDER BY created_at DESC LIMIT 1",
+            )
+            .bind(wid)
+            .fetch_optional(&state.db_pool)
+            .await
+            .ok()
+            .flatten();
+            if let Some((details,)) = ev {
+                let steps = details
+                    .as_ref()
+                    .and_then(|d| d.get("plan"))
+                    .and_then(|p| p.as_str())
+                    .map(|p| {
+                        p.lines()
+                            .filter(|l| l.trim_start().to_uppercase().starts_with("STEP"))
+                            .count()
+                    });
+                if let Some(n) = steps {
+                    if n > 0 {
+                        plan_steps = Some(n);
+                        detail = format!("Build plan locked: {n} steps. {detail}");
+                    }
+                }
+            }
+        }
+    }
+
     let mut out = serde_json::json!({
         "success": true,
         "status": status,
@@ -8294,6 +8330,7 @@ pub async fn delivery_progress(
         "progress_pct": pct,
         "eta_minutes": eta_minutes,
         "eta_overrun": eta_overrun,
+        "plan_steps": plan_steps,
     });
 
     let want_explain = std::env::var("DELIVERY_EXPLAIN_AGENT")

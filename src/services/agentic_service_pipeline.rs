@@ -449,6 +449,30 @@ impl AgenticServicePipeline {
         // plan artifact (app_workflow_events / trace endpoint). Bounded cost:
         // exactly one extra fast-chain call per RUN (not per attempt).
         let execution_plan = generate_execution_plan(&state, service_type, &input).await;
+        // Deterministic gate + one retry + guaranteed-sane canned fallback
+        // (owner directive Nov 12 2026): a junk plan used to ship into the
+        // agent with only a log warning.
+        let mut plan_source = "llm";
+        let execution_plan = match execution_plan {
+            Ok(plan) if plan_is_valid(&plan, service_type) => Ok(plan),
+            Ok(invalid) => {
+                tracing::warn!(workflow_id = %workflow_id, "planner output invalid — retrying once");
+                let _ = invalid;
+                let retry = generate_execution_plan(&state, service_type, &input).await;
+                match retry {
+                    Ok(plan) if plan_is_valid(&plan, service_type) => Ok(plan),
+                    _ => {
+                        plan_source = "canned_fallback";
+                        Ok(canned_plan(service_type, input.delivery_id))
+                    }
+                }
+            }
+            Err(e) => {
+                tracing::warn!(workflow_id = %workflow_id, "execution plan generation failed — using canned plan: {e}");
+                plan_source = "canned_fallback";
+                Ok(canned_plan(service_type, input.delivery_id))
+            }
+        };
         let mut agent_prompt = Self::build_agent_prompt(service_type, &input, &output_dir);
         match &execution_plan {
             Ok(plan) if !plan.trim().is_empty() => {
@@ -458,7 +482,7 @@ impl AgenticServicePipeline {
                         "execution_plan",
                         None,
                         "Execution plan generated",
-                        json!({ "plan": plan }),
+                        json!({ "plan": plan, "source": plan_source }),
                     )
                     .await;
                 tracing::info!(workflow_id = %workflow_id, "🗺️ execution plan generated");
@@ -2049,6 +2073,83 @@ async fn generate_execution_plan(
             .collect::<Vec<_>>()
             .join("\n")
     })
+}
+
+/// Deterministic gate for a generated plan (owner directive Nov 12 2026: the
+/// planner's output must be structurally sound BEFORE it steers a 30-minute
+/// agent run — junk plans used to ship with only a warning in the logs).
+fn plan_is_valid(plan: &str, service_type: ServiceType) -> bool {
+    let steps: Vec<&str> = plan
+        .lines()
+        .filter(|l| l.trim_start().to_uppercase().starts_with("STEP"))
+        .collect();
+    if steps.len() < 4 || steps.len() > 12 {
+        return false;
+    }
+    let lower = plan.to_lowercase();
+    // Every narrated video service must plan a narration step.
+    let narrated = !matches!(
+        service_type,
+        ServiceType::Clipping | ServiceType::VoiceAudio | ServiceType::Thumbnails
+    );
+    if narrated
+        && !lower.contains("generate_narration")
+        && !lower.contains("add_voiceover")
+        && !lower.contains("generate_text_to_speech")
+    {
+        return false;
+    }
+    // QA step is mandatory for every service.
+    if !lower.contains("review_video") {
+        return false;
+    }
+    // The final step must produce the final artifact.
+    let last = steps.last().unwrap_or(&"").to_lowercase();
+    if service_type == ServiceType::Clipping {
+        last.contains("clip") || last.contains("compilation")
+    } else {
+        last.contains("output.mp4")
+    }
+}
+
+/// Deterministic canned plan built from the per-service tool chain — the
+/// guaranteed-sane fallback when the LLM planner fails validation twice.
+fn canned_plan(service_type: ServiceType, delivery_id: Uuid) -> String {
+    let chains: &[&str] = match service_type {
+        ServiceType::Clipping => &["download_source_media -> source.mp4",
+            "generate_clip_compilation(highlights, captions) -> clip URLs",
+            "review_video(clip compilation) -> QA pass",
+            "submit_final_answer(clip URLs) -> delivered clips"],
+        ServiceType::VoiceAudio => &["generate_narration(script lines) -> audio.mp3",
+            "review_video(audio levels) -> QA pass",
+            "submit_final_answer(audio files) -> delivered audio"],
+        ServiceType::LandingPage | ServiceType::Education | ServiceType::BusinessExplainer
+        | ServiceType::InvestorPitch | ServiceType::IsometricExplainer
+        | ServiceType::AnimatedInfographic | ServiceType::YearInReview => &[
+            "browserbase_crawl_website(source url) -> crawled facts",
+            "generate_video_script(facts, brief) -> scene plan",
+            "generate_narration(scene lines) -> narration.mp3 + timeline",
+            "hyperframes_render(scene compositions) -> visuals.mp4",
+            "add_audio(visuals, narration) -> output.mp4",
+            "review_video(output.mp4) -> QA pass",
+            "submit_final_answer(output.mp4) -> delivered video",
+        ],
+        _ => &[
+            "generate_video_script(brief) -> scene plan",
+            "generate_narration(scene lines) -> narration.mp3 + timeline",
+            "hyperframes_render(scene compositions) -> visuals.mp4",
+            "merge_videos(scene clips) -> merged.mp4",
+            "add_audio(merged, narration) -> output.mp4",
+            "review_video(output.mp4) -> QA pass",
+            "submit_final_answer(output.mp4) -> delivered video",
+        ],
+    };
+    chains
+        .iter()
+        .enumerate()
+        .map(|(i, s)| format!("STEP {}: {} (outputs/agentic_{delivery_id}/)", i + 1, s))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 // ── Targeted repair scope (QA-failure triage) ────────────────────────────────
