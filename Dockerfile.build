@@ -11,7 +11,9 @@
 # toolchain (matches Dockerfile.render). Bump deliberately, with a green
 # build, never by accident via a base-image digest change.
 FROM rust:1.82-bookworm AS chef
-RUN cargo install cargo-chef --locked
+# cargo-chef pinned too: latest requires a newer rustc than 1.82 (hit in the
+# same Nov 13 2026 incident). 0.1.71 predates-and-supports rust 1.82.
+RUN cargo install cargo-chef --locked --version 0.1.71
 WORKDIR /app
 
 FROM chef AS planner
