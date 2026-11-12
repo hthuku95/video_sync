@@ -271,6 +271,7 @@ fn service_tool_names(scope: &str) -> Option<Vec<&'static str>> {
             "generate_video_script",
             "generate_narration",
             "hyperframes_render",
+            "polyfork_search_assets",
             "manim_execute_script",
             "merge_videos",
             "add_voiceover_to_video",

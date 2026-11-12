@@ -1494,6 +1494,7 @@ pub async fn execute_tool_claude(name: &str, args: &Value) -> String {
 
         // AI/Generation tools
         "pexels_search" => execute_pexels_search_claude(args).await,
+        "polyfork_search_assets" => execute_polyfork_search(args).await,
         "pexels_download_video" => execute_pexels_download_video_claude(args).await,
         "pexels_download_photo" => execute_pexels_download_photo_claude(args).await,
         "pexels_get_trending" => execute_pexels_get_trending_claude(args).await,
@@ -1913,6 +1914,7 @@ pub async fn execute_tool_gemini(name: &str, args: &HashMap<String, Value>) -> S
 
         // AI/Generation tools
         "pexels_search" => execute_pexels_search_gemini(args).await,
+        "polyfork_search_assets" => execute_polyfork_search(args).await,
         "pexels_download_video" => execute_pexels_download_video_gemini(args).await,
         "pexels_download_photo" => execute_pexels_download_photo_gemini(args).await,
         "pexels_get_trending" => execute_pexels_get_trending_gemini(args).await,
@@ -2698,6 +2700,118 @@ fn execute_stabilize_video_claude(args: &Value) -> String {
     let output = ensure_outputs_directory(output_raw);
     let strength = args["strength"].as_u64().unwrap_or(5) as u32;
     crate::transform::stabilize_video(input, &output, strength).unwrap_or_else(|e| e)
+}
+
+/// Polyfork 3D asset catalog search (owner approval Nov 13 2026).
+/// Public JSON API, no key needed for free assets. Returns compact rows the
+/// agent can place directly into a HyperFrames composition (three.js GLB or
+/// createAsset() ES module, both CORS-open hotlinks).
+async fn execute_polyfork_search(args: &Value) -> String {
+    let query = args["query"].as_str().unwrap_or("").trim();
+    let class = args["asset_class"].as_str().unwrap_or("").trim();
+    let max_tri = args["max_triangles"].as_u64();
+    let per_page = args["per_page"].as_u64().unwrap_or(8).clamp(1, 20);
+
+    if query.is_empty() {
+        return "❌ Error: query is required for Polyfork search".to_string();
+    }
+
+    let mut url = format!(
+        "https://polyfork.dev/api/assets?q={}&per_page={}",
+        urlencode(query),
+        per_page
+    );
+    if !class.is_empty() {
+        url.push_str(&format!("&class={}", urlencode(class)));
+    }
+    if let Some(t) = max_tri {
+        url.push_str(&format!("&max_triangles={}", t));
+    }
+
+    let resp = tokio::time::timeout(std::time::Duration::from_secs(30), reqwest::get(&url))
+        .await
+        .map_err(|_| "polyfork request timed out".to_string())
+        .and_then(|r| r);
+    let resp = match resp {
+        Ok(r) => r,
+        Err(e) => return format!("❌ Polyfork search failed: {}", e),
+    };
+    let body: Value = match resp.json().await {
+        Ok(v) => v,
+        Err(e) => return format!("❌ Polyfork returned invalid JSON: {}", e),
+    };
+
+    let assets = body
+        .get("assets")
+        .or_else(|| body.get("results"))
+        .or_else(|| body.get("items"))
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    if assets.is_empty() {
+        let coverage = body
+            .get("coverage")
+            .and_then(|c| c.as_str())
+            .unwrap_or("none");
+        let unmatched = body
+            .get("unmatched_terms")
+            .and_then(|u| u.as_array())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|x| x.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            })
+            .unwrap_or_default();
+        let mut out = format!(
+            "⚠️ No Polyfork assets matched (coverage: {coverage}). Relax filters or reword the query."
+        );
+        if !unmatched.is_empty() {
+            out.push_str(&format!(" No matches for: {unmatched}."));
+        }
+        return out;
+    }
+
+    let mut out = String::from("🧊 Polyfork 3D assets (free, commercial, no attribution):\n");
+    out.push_str("Embed in HyperFrames: import the .mjs module (import createAsset from '<mjs_url>'; scene.add(createAsset(params))) OR the GLB via three.js GLTFLoader — both hotlink directly, CORS-open. Use the import map entries 'three' and 'three/addons/' (trailing slash required). Wait for the model to load BEFORE the timeline starts (seek-safe). Characters carry Idle/Walk/Run clips.\n\n");
+    for a in assets.iter() {
+        let id = a.get("id").and_then(|v| v.as_str()).unwrap_or("");
+        let name = a.get("name").and_then(|v| v.as_str()).unwrap_or(id);
+        let tris = a.get("triangles").and_then(|v| v.as_u64()).unwrap_or(0);
+        let size = a.get("size_m").cloned().unwrap_or(Value::Null);
+        let rig = [
+            ("has_rig", a.get("has_rig")),
+            ("has_skeleton", a.get("has_skeleton")),
+            ("has_ik", a.get("has_ik")),
+        ]
+        .iter()
+        .filter(|(_, v)| v.map(|x| x.as_bool().unwrap_or(false)).unwrap_or(false))
+        .map(|(k, _)| *k)
+        .collect::<Vec<_>>()
+        .join(",");
+        out.push_str(&format!(
+            "- id={id} | {name} | tris={tris} | size_m={size}{}\n  glb: https://polyfork.dev/cdn/{id}.glb | module: https://polyfork.dev/cdn/{id}.mjs | knobs: https://polyfork.dev/cdn/{id}-params.json\n",
+            if rig.is_empty() { String::new() } else { format!(" | {rig}") }
+        ));
+    }
+    let total = body.get("total").and_then(|v| v.as_u64());
+    if let Some(t) = total {
+        out.push_str(&format!("\n(total matches: {t})"));
+    }
+    out
+}
+
+fn urlencode(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for b in s.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(b as char)
+            }
+            _ => out.push_str(&format!("%{:02X}", b)),
+        }
+    }
+    out
 }
 
 async fn execute_pexels_search_claude(args: &Value) -> String {

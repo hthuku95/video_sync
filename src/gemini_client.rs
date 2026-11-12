@@ -1212,10 +1212,49 @@ impl GeminiClient {
         }
     }
 
+    /// Polyfork: agent-searchable 3D asset catalog (owner approval Nov 13 2026).
+    /// License-clean for us: free low-poly meshes hotlinked per-scene from
+    /// /cdn are explicitly allowed ("linking is not redistribution"); we must
+    /// never bulk-download or re-serve the catalog.
+    pub fn polyfork_search_assets_tool() -> FunctionDeclaration {
+        FunctionDeclaration {
+            name: "polyfork_search_assets".to_string(),
+            description: "Search the Polyfork 3D asset catalog (3,291+ free, parametric, game-ready low-poly models — props, buildings, vehicles, rigged characters with Mixamo-ready skeletons, terrain). Use for ANY 3D-looking scene element in a HyperFrames composition: import the returned module (createAsset()) or GLB with three.js and place it at real-world scale. Assets carry real meters, ground origin, exact hex palettes, rig/IK flags. Commercial use, no attribution needed. Filter by class and triangle budget; characters have walk/run/idle clips built in.".to_string(),
+            parameters: Parameters {
+                param_type: "object".to_string(),
+                properties: {
+                    let mut props = std::collections::HashMap::new();
+                    props.insert("query".to_string(), PropertyDefinition {
+                        prop_type: "string".to_string(),
+                        description: "What you need, in plain words: e.g. 'cozy medieval market stall', 'modern office desk setup', 'delivery van'.".to_string(),
+                        items: None,
+                    });
+                    props.insert("asset_class".to_string(), PropertyDefinition {
+                        prop_type: "string".to_string(),
+                        description: "Optional filter: prop | building | vehicle | character | animal | terrain | hand | ultra | attachment".to_string(),
+                        items: None,
+                    });
+                    props.insert("max_triangles".to_string(), PropertyDefinition {
+                        prop_type: "number".to_string(),
+                        description: "Optional triangle budget to keep renders fast (e.g. 8000).".to_string(),
+                        items: None,
+                    });
+                    props.insert("per_page".to_string(), PropertyDefinition {
+                        prop_type: "number".to_string(),
+                        description: "Optional result count, 1-20 (default 8).".to_string(),
+                        items: None,
+                    });
+                    props
+                },
+                required: vec!["query".to_string()],
+            },
+        }
+    }
+
     pub fn hyperframes_render_tool() -> FunctionDeclaration {
         FunctionDeclaration {
             name: "hyperframes_render".to_string(),
-            description: "Render an HTML/CSS/JS composition to MP4 on CPU (headless Chrome + FFmpeg, no GPU). FULL ACCESS to every HyperFrames feature — use freely and creatively based on the brief: 50+ cinematic VFX shaders (glitch, film grain, chromatic aberration, bloom, halftone, CRT, etc.), Slug GPU vector typography (word-by-word kinetic reveals), d3 animated charts and data visualizations, a unified 3D scene graph with glTF import and PBR materials, GSAP timelines, Lottie animation playback, audio visualization/reactive motion, transitions, masks, CSS perspective/parallax for 3D-looking depth. Use for: landing page hero videos, product intros, title cards, kinetic typography, animated explainers, slideshows, how-to videos, marketing videos, product demos, testimonials — ANY video type. Pass a COMPLETE standalone index.html string (inline CSS/JS, data-* timing attributes per HyperFrames composition contract). When a narration timeline exists, the root data-duration MUST equal the narration duration and every scene's data-start/data-duration MUST match the timeline exactly; scenes tile end-to-end, and the last readable element enters by 50% of its scene. FEATURE BUDGET: when the scene plan names HyperFrames features for a scene, implement every named feature in that scene's HTML — at least 3 distinct features across the whole composition, and no two consecutive scenes with an identical feature set; a composition that is only plain fades/text cards despite a richer plan is a quality failure. Keep text inside safe margins with clamp() sizes and overflow-wrap so nothing is cropped. Returns an R2 URL to the finished MP4. Prefer this over Blender for 2D motion graphics (much faster on CPU); keep manim_execute_script for math/diagrams/LaTeX.".to_string(),
+            description: "Render an HTML/CSS/JS composition to MP4 on CPU (headless Chrome + FFmpeg, no GPU). FULL ACCESS to every HyperFrames feature — use freely and creatively based on the brief: 50+ cinematic VFX shaders (glitch, film grain, chromatic aberration, bloom, halftone, CRT, etc.), Slug GPU vector typography (word-by-word kinetic reveals), d3 animated charts and data visualizations, a unified 3D scene graph with glTF import and PBR materials, GSAP timelines, Lottie animation playback, audio visualization/reactive motion, transitions, masks, CSS perspective/parallax for 3D-looking depth. Use for: landing page hero videos, product intros, title cards, kinetic typography, animated explainers, slideshows, how-to videos, marketing videos, product demos, testimonials — ANY video type. Pass a COMPLETE standalone index.html string (inline CSS/JS, data-* timing attributes per HyperFrames composition contract). 3D FROM POLYFORK (recommended for any 3D-looking element): call polyfork_search_assets first, then import the returned module (import createAsset from 'https://polyfork.dev/cdn/{id}.mjs'; scene.add(createAsset())) or GLB via three.js GLTFLoader — both hotlink CORS-open at real-world scale. Required import map entries: 'three' AND 'three/addons/' (trailing slash required). Construct the renderer with preserveDrawingBuffer: true. Wait for the model to load BEFORE the timeline starts (seek-safe). Characters carry Idle/Walk/Run clips; assets carry hex palettes — tint scene colors to match. When a narration timeline exists, the root data-duration MUST equal the narration duration and every scene's data-start/data-duration MUST match the timeline exactly; scenes tile end-to-end, and the last readable element enters by 50% of its scene. FEATURE BUDGET: when the scene plan names HyperFrames features for a scene, implement every named feature in that scene's HTML — at least 3 distinct features across the whole composition, and no two consecutive scenes with an identical feature set; a composition that is only plain fades/text cards despite a richer plan is a quality failure. Keep text inside safe margins with clamp() sizes and overflow-wrap so nothing is cropped. Returns an R2 URL to the finished MP4. Prefer this over Blender for 2D motion graphics (much faster on CPU); keep manim_execute_script for math/diagrams/LaTeX.".to_string(),
             parameters: Parameters {
                 param_type: "object".to_string(),
                 properties: {
@@ -2140,6 +2179,38 @@ impl GeminiClient {
                                 props
                             },
                             required: vec!["query".to_string(), "media_type".to_string()],
+                        },
+                    },
+                    FunctionDeclaration {
+                        name: "polyfork_search_assets".to_string(),
+                        description: "Search the Polyfork 3D asset catalog (3,291+ free parametric low-poly models: props, buildings, vehicles, rigged characters, terrain). Use for 3D-looking scene elements in HyperFrames compositions — import the returned .mjs module (createAsset()) or .glb with three.js. Real-world scale, hex palettes, rig/IK flags; commercial use, no attribution.".to_string(),
+                        parameters: Parameters {
+                            param_type: "object".to_string(),
+                            properties: {
+                                let mut props = HashMap::new();
+                                props.insert("query".to_string(), PropertyDefinition {
+                                    prop_type: "string".to_string(),
+                                    description: "What you need in plain words: 'cozy medieval market stall', 'delivery van', 'modern office desk'".to_string(),
+                                    items: None,
+                                });
+                                props.insert("asset_class".to_string(), PropertyDefinition {
+                                    prop_type: "string".to_string(),
+                                    description: "Optional: prop | building | vehicle | character | animal | terrain | hand | ultra | attachment".to_string(),
+                                    items: None,
+                                });
+                                props.insert("max_triangles".to_string(), PropertyDefinition {
+                                    prop_type: "number".to_string(),
+                                    description: "Optional triangle budget to keep renders fast".to_string(),
+                                    items: None,
+                                });
+                                props.insert("per_page".to_string(), PropertyDefinition {
+                                    prop_type: "number".to_string(),
+                                    description: "Optional result count, 1-20 (default 8)".to_string(),
+                                    items: None,
+                                });
+                                props
+                            },
+                            required: vec!["query".to_string()],
                         },
                     },
                     FunctionDeclaration {
