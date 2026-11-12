@@ -453,7 +453,7 @@ impl AgenticServicePipeline {
         // (owner directive Nov 12 2026): a junk plan used to ship into the
         // agent with only a log warning.
         let mut plan_source = "llm";
-        let execution_plan = match execution_plan {
+        let execution_plan: Result<String, String> = match execution_plan {
             Ok(plan) if plan_is_valid(&plan, service_type) => Ok(plan),
             Ok(invalid) => {
                 tracing::warn!(workflow_id = %workflow_id, "planner output invalid — retrying once");
