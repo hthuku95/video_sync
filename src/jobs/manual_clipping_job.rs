@@ -213,6 +213,7 @@ pub async fn execute_manual_clipping_job(
             source_record_id: Some(delivery_id),
             idempotency_key: Some(format!("agentic-manual-clipping:{}", job_id)),
             reference_images: vec![],
+        nim_profile: None,
         },
     )
     .await

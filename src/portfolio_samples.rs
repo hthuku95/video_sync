@@ -230,6 +230,7 @@ pub fn service_input_for(
         source_record_id: None,
         idempotency_key: None,
         reference_images: vec![],
+        nim_profile: None,
     }
 }
 

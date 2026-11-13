@@ -141,6 +141,7 @@ pub async fn execute_clipping_job(job_id: i32, app_state: Arc<AppState>) -> Resu
             source_record_id: Some(delivery_id),
             idempotency_key: Some(format!("agentic-clipping-job:{}", job_id)),
             reference_images: vec![],
+        nim_profile: None,
         },
     )
     .await

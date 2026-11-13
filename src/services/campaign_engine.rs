@@ -1,4 +1,6 @@
-use crate::services::agentic_service_pipeline::{AgenticServicePipeline, ServiceInput, ServiceType};
+use crate::services::agentic_service_pipeline::{
+    AgenticServicePipeline, ServiceInput, ServiceType,
+};
 use crate::zernio_client::{self, PlatformTarget};
 use crate::AppState;
 use regex::Regex;
@@ -57,7 +59,24 @@ struct PostRow {
 // ── Step 1: Fetch active campaigns ──────────────────────────────────────────
 
 async fn fetch_active_campaigns(state: &Arc<AppState>) -> Result<Vec<CampaignRow>, sqlx::Error> {
-    sqlx::query_as::<_, (Uuid, i32, String, String, String, String, f64, serde_json::Value, serde_json::Value, i32, chrono::DateTime<chrono::Utc>, Option<String>, Option<String>)>(
+    sqlx::query_as::<
+        _,
+        (
+            Uuid,
+            i32,
+            String,
+            String,
+            String,
+            String,
+            f64,
+            serde_json::Value,
+            serde_json::Value,
+            i32,
+            chrono::DateTime<chrono::Utc>,
+            Option<String>,
+            Option<String>,
+        ),
+    >(
         "SELECT id, user_id, name, service_type, brief, style, duration, schedule, platforms, \
                 posts_per_day, start_date, zernio_profile_id, source_url \
          FROM campaigns \
@@ -68,9 +87,39 @@ async fn fetch_active_campaigns(state: &Arc<AppState>) -> Result<Vec<CampaignRow
     .await
     .map(|rows| {
         rows.into_iter()
-            .map(|(id, user_id, name, service_type, brief, style, duration, schedule, platforms, posts_per_day, start_date, zernio_profile_id, source_url)| {
-                CampaignRow { id, user_id, name, service_type, brief, style, duration, schedule, platforms, posts_per_day, start_date, zernio_profile_id, source_url }
-            })
+            .map(
+                |(
+                    id,
+                    user_id,
+                    name,
+                    service_type,
+                    brief,
+                    style,
+                    duration,
+                    schedule,
+                    platforms,
+                    posts_per_day,
+                    start_date,
+                    zernio_profile_id,
+                    source_url,
+                )| {
+                    CampaignRow {
+                        id,
+                        user_id,
+                        name,
+                        service_type,
+                        brief,
+                        style,
+                        duration,
+                        schedule,
+                        platforms,
+                        posts_per_day,
+                        start_date,
+                        zernio_profile_id,
+                        source_url,
+                    }
+                },
+            )
             .collect()
     })
 }
@@ -87,7 +136,24 @@ pub async fn run_campaign_cycle_now(
     campaign_id: Uuid,
     user_id: i32,
 ) -> Result<Vec<(Uuid, i32, i32, String, Option<String>)>, String> {
-    let row = sqlx::query_as::<_, (Uuid, i32, String, String, String, String, f64, serde_json::Value, serde_json::Value, i32, chrono::DateTime<chrono::Utc>, Option<String>, Option<String>)>(
+    let row = sqlx::query_as::<
+        _,
+        (
+            Uuid,
+            i32,
+            String,
+            String,
+            String,
+            String,
+            f64,
+            serde_json::Value,
+            serde_json::Value,
+            i32,
+            chrono::DateTime<chrono::Utc>,
+            Option<String>,
+            Option<String>,
+        ),
+    >(
         "SELECT id, user_id, name, service_type, brief, style, duration, schedule, platforms, \
                 posts_per_day, start_date, zernio_profile_id, source_url \
          FROM campaigns WHERE id = $1 AND user_id = $2 AND status = 'active' \
@@ -99,14 +165,39 @@ pub async fn run_campaign_cycle_now(
     .await
     .map_err(|e| e.to_string())?;
 
-    let Some((id, uid, name, service_type, brief, style, duration, schedule, platforms, posts_per_day, start_date, zernio_profile_id, source_url)) = row else {
+    let Some((
+        id,
+        uid,
+        name,
+        service_type,
+        brief,
+        style,
+        duration,
+        schedule,
+        platforms,
+        posts_per_day,
+        start_date,
+        zernio_profile_id,
+        source_url,
+    )) = row
+    else {
         return Err("Campaign not found, not active, or not paid".to_string());
     };
     let _ = (posts_per_day, schedule, platforms);
     let campaign = CampaignRow {
-        id, user_id: uid, name, service_type, brief, style, duration,
-        schedule: serde_json::Value::Null, platforms: serde_json::Value::Null,
-        posts_per_day: 0, start_date, zernio_profile_id, source_url,
+        id,
+        user_id: uid,
+        name,
+        service_type,
+        brief,
+        style,
+        duration,
+        schedule: serde_json::Value::Null,
+        platforms: serde_json::Value::Null,
+        posts_per_day: 0,
+        start_date,
+        zernio_profile_id,
+        source_url,
     };
 
     // Create the immediate test slot unless one is already open today.
@@ -222,9 +313,12 @@ struct ScheduleSlot {
     index: Option<i32>,
 }
 
-async fn fill_today_slots(state: &Arc<AppState>, campaign: &CampaignRow) -> Result<(), sqlx::Error> {
-    let schedule: Vec<ScheduleSlot> = serde_json::from_value(campaign.schedule.clone())
-        .unwrap_or_default();
+async fn fill_today_slots(
+    state: &Arc<AppState>,
+    campaign: &CampaignRow,
+) -> Result<(), sqlx::Error> {
+    let schedule: Vec<ScheduleSlot> =
+        serde_json::from_value(campaign.schedule.clone()).unwrap_or_default();
     if schedule.is_empty() {
         return Ok(());
     }
@@ -353,20 +447,29 @@ async fn process_pending_post(state: &Arc<AppState>, campaign: &CampaignRow, pos
     // Service switch (owner directive Sep 2026): only enabled services render.
     // Disabled-service slots stay pending (NOT failed) so they resume cleanly
     // if the service is re-enabled — and cost zero LLM calls while off.
-    if !crate::services::service_flags::service_enabled(&state.db_pool, &campaign.service_type).await
+    if !crate::services::service_flags::service_enabled(&state.db_pool, &campaign.service_type)
+        .await
     {
         tracing::info!(
             "campaign[{}] post[{}]: service '{}' disabled, slot skipped (stays pending)",
-            campaign.id, post.id, campaign.service_type
+            campaign.id,
+            post.id,
+            campaign.service_type
         );
         return;
     }
     // 1. Generate variation from brief
-    let variation = generate_variation(state, &campaign.brief, post.day_number, post.slot_index).await;
+    let variation =
+        generate_variation(state, &campaign.brief, post.day_number, post.slot_index).await;
     let variation_text = match variation {
         Ok(v) => v,
         Err(e) => {
-            tracing::error!("campaign[{}] post[{}]: variation gen failed: {}", campaign.id, post.id, e);
+            tracing::error!(
+                "campaign[{}] post[{}]: variation gen failed: {}",
+                campaign.id,
+                post.id,
+                e
+            );
             mark_post_failed(state, post.id, &format!("Variation generation failed: {e}")).await;
             return;
         }
@@ -429,11 +532,21 @@ async fn process_pending_post(state: &Arc<AppState>, campaign: &CampaignRow, pos
 
     // Resolve the source URL to the latest video (for clipping/Kick campaigns)
     let source_url = if let Some(ref url) = campaign.source_url {
-        let resolved = resolve_latest_video_url(state, url).await.unwrap_or_else(|e| {
-            tracing::warn!("campaign[{}] post[{}]: resolve_source_url failed: {e}", campaign.id, post.id);
-            url.clone()
-        });
-        if resolved.is_empty() { None } else { Some(resolved) }
+        let resolved = resolve_latest_video_url(state, url)
+            .await
+            .unwrap_or_else(|e| {
+                tracing::warn!(
+                    "campaign[{}] post[{}]: resolve_source_url failed: {e}",
+                    campaign.id,
+                    post.id
+                );
+                url.clone()
+            });
+        if resolved.is_empty() {
+            None
+        } else {
+            Some(resolved)
+        }
     } else {
         None
     };
@@ -443,9 +556,14 @@ async fn process_pending_post(state: &Arc<AppState>, campaign: &CampaignRow, pos
         let campaign_id = campaign.id;
         let campaign_service_type = &campaign.service_type;
         let skills = crate::services::skills::get_relevant_skills(
-            &state.db_pool, Some(campaign_service_type), Some(campaign_id),
-            Some(campaign.user_id), 5,
-        ).await.unwrap_or_default();
+            &state.db_pool,
+            Some(campaign_service_type),
+            Some(campaign_id),
+            Some(campaign.user_id),
+            5,
+        )
+        .await
+        .unwrap_or_default();
         let skills_context = crate::services::skills::format_skills_context(&skills);
         if skills_context.is_empty() {
             variation_text.clone()
@@ -455,7 +573,12 @@ async fn process_pending_post(state: &Arc<AppState>, campaign: &CampaignRow, pos
     };
 
     let input = ServiceInput {
-        title: format!("{} — Day {} Slot {}", campaign.name, post.day_number, post.slot_index + 1),
+        title: format!(
+            "{} — Day {} Slot {}",
+            campaign.name,
+            post.day_number,
+            post.slot_index + 1
+        ),
         brief: enriched_brief,
         source_url,
         style: campaign.style.clone(),
@@ -468,17 +591,21 @@ async fn process_pending_post(state: &Arc<AppState>, campaign: &CampaignRow, pos
         source_record_id: Some(delivery_id),
         idempotency_key: None,
         reference_images: get_campaign_file_urls(state, campaign.id).await,
+        nim_profile: None,
     };
 
     match AgenticServicePipeline::start(state.clone(), campaign.service_type.clone(), input).await {
         Ok(_) => tracing::info!(
             "campaign[{}] post[{}] delivery[{}]: rendering started",
-            campaign.id, post.id, delivery_id
+            campaign.id,
+            post.id,
+            delivery_id
         ),
         Err(e) => {
             tracing::error!(
                 "campaign[{}] post[{}]: failed to start rendering: {e}",
-                campaign.id, post.id
+                campaign.id,
+                post.id
             );
             mark_post_failed(state, post.id, &format!("Failed to start rendering: {e}")).await;
         }
@@ -488,11 +615,13 @@ async fn process_pending_post(state: &Arc<AppState>, campaign: &CampaignRow, pos
 // ── Get campaign file reference images ─────────────────────────────────────
 
 async fn get_campaign_file_urls(state: &Arc<AppState>, campaign_id: Uuid) -> Vec<String> {
-    sqlx::query_scalar::<_, String>("SELECT r2_url FROM campaign_files WHERE campaign_id = $1 ORDER BY uploaded_at")
-        .bind(campaign_id)
-        .fetch_all(&state.db_pool)
-        .await
-        .unwrap_or_default()
+    sqlx::query_scalar::<_, String>(
+        "SELECT r2_url FROM campaign_files WHERE campaign_id = $1 ORDER BY uploaded_at",
+    )
+    .bind(campaign_id)
+    .fetch_all(&state.db_pool)
+    .await
+    .unwrap_or_default()
 }
 
 // ── Generate variation ──────────────────────────────────────────────────────
@@ -588,16 +717,19 @@ async fn assess_workflow_liveness(
         return legacy_rule();
     };
 
-    let row: Option<(Option<String>, Option<chrono::DateTime<chrono::Utc>>, Option<String>)> =
-        sqlx::query_as(
-            "SELECT status, last_heartbeat_at, error_message \
+    let row: Option<(
+        Option<String>,
+        Option<chrono::DateTime<chrono::Utc>>,
+        Option<String>,
+    )> = sqlx::query_as(
+        "SELECT status, last_heartbeat_at, error_message \
              FROM app_workflows WHERE id = $1",
-        )
-        .bind(wid)
-        .fetch_optional(&state.db_pool)
-        .await
-        .ok()
-        .flatten();
+    )
+    .bind(wid)
+    .fetch_optional(&state.db_pool)
+    .await
+    .ok()
+    .flatten();
 
     let Some((wf_status, last_heartbeat, wf_error)) = row else {
         return legacy_rule();
@@ -637,30 +769,28 @@ async fn assess_workflow_liveness(
 
 async fn check_rendering_post(state: &Arc<AppState>, campaign: &CampaignRow, post: &PostRow) {
     // Read delivery_id from campaign post
-    let delivery_id: Option<Uuid> = sqlx::query_scalar(
-        "SELECT delivery_id FROM campaign_posts WHERE id = $1",
-    )
-    .bind(post.id)
-    .fetch_optional(&state.db_pool)
-    .await
-    .ok()
-    .flatten()
-    .flatten();
+    let delivery_id: Option<Uuid> =
+        sqlx::query_scalar("SELECT delivery_id FROM campaign_posts WHERE id = $1")
+            .bind(post.id)
+            .fetch_optional(&state.db_pool)
+            .await
+            .ok()
+            .flatten()
+            .flatten();
 
     let Some(delivery_id) = delivery_id else {
         // Claimed but no delivery yet. Two cases:
         //  a) another task's worker claimed it moments ago and the delivery
         //     INSERT is still in flight → grace window, do nothing;
         //  b) the claiming worker died mid-claim (task replaced) → fail.
-        let claimed_at: Option<chrono::DateTime<chrono::Utc>> = sqlx::query_scalar(
-            "SELECT claimed_at FROM campaign_posts WHERE id = $1",
-        )
-        .bind(post.id)
-        .fetch_optional(&state.db_pool)
-        .await
-        .ok()
-        .flatten()
-        .flatten();
+        let claimed_at: Option<chrono::DateTime<chrono::Utc>> =
+            sqlx::query_scalar("SELECT claimed_at FROM campaign_posts WHERE id = $1")
+                .bind(post.id)
+                .fetch_optional(&state.db_pool)
+                .await
+                .ok()
+                .flatten()
+                .flatten();
 
         let stale = claimed_at
             .map(|t| chrono::Utc::now() - t > chrono::Duration::minutes(10))
@@ -722,14 +852,13 @@ async fn check_rendering_post(state: &Arc<AppState>, campaign: &CampaignRow, pos
     // final_qa_score >= PUBLISH_QA_THRESHOLD goes public; everything else
     // fails the post honestly (owner can regenerate manually).
     const PUBLISH_QA_THRESHOLD: i32 = 6;
-    let qa_score: Option<i32> = sqlx::query_scalar(
-        "SELECT final_qa_score FROM deliveries WHERE id = $1",
-    )
-    .bind(delivery_id)
-    .fetch_optional(&state.db_pool)
-    .await
-    .ok()
-    .flatten();
+    let qa_score: Option<i32> =
+        sqlx::query_scalar("SELECT final_qa_score FROM deliveries WHERE id = $1")
+            .bind(delivery_id)
+            .fetch_optional(&state.db_pool)
+            .await
+            .ok()
+            .flatten();
 
     if let Some(score) = qa_score {
         if score < PUBLISH_QA_THRESHOLD {
@@ -744,7 +873,9 @@ async fn check_rendering_post(state: &Arc<AppState>, campaign: &CampaignRow, pos
             .await;
             tracing::warn!(
                 "🚫 PUBLISH_QA_REJECTED: post {} blocked (score {} < {})",
-                post.id, score, PUBLISH_QA_THRESHOLD
+                post.id,
+                score,
+                PUBLISH_QA_THRESHOLD
             );
             return;
         }
@@ -762,7 +893,15 @@ async fn check_rendering_post(state: &Arc<AppState>, campaign: &CampaignRow, pos
 
     // Schedule via Zernio if configured
     if let Some(ref profile_id) = campaign.zernio_profile_id {
-        schedule_via_zernio(state, campaign.user_id, profile_id, post, &url, &campaign.platforms).await;
+        schedule_via_zernio(
+            state,
+            campaign.user_id,
+            profile_id,
+            post,
+            &url,
+            &campaign.platforms,
+        )
+        .await;
     }
 
     let new_status = if campaign.zernio_profile_id.is_some() {
@@ -771,17 +910,19 @@ async fn check_rendering_post(state: &Arc<AppState>, campaign: &CampaignRow, pos
         "published"
     };
 
-    let _ = sqlx::query(
-        "UPDATE campaign_posts SET status = $1, published_at = NOW() WHERE id = $2",
-    )
-    .bind(new_status)
-    .bind(post.id)
-    .execute(&state.db_pool)
-    .await;
+    let _ =
+        sqlx::query("UPDATE campaign_posts SET status = $1, published_at = NOW() WHERE id = $2")
+            .bind(new_status)
+            .bind(post.id)
+            .execute(&state.db_pool)
+            .await;
 
     tracing::info!(
         "campaign post {} → {} (delivery={}, url={})",
-        post.id, new_status, delivery_id, url
+        post.id,
+        new_status,
+        delivery_id,
+        url
     );
 
     // Store embedding in Qdrant for campaign learning
@@ -936,13 +1077,12 @@ async fn schedule_via_zernio(
     // Ownership + platform backstop (owner directive Oct 2026): explicit
     // targets are re-validated at publish time (rows may predate the guards).
     // Drops anything not owned by this user or off the allowed platforms.
-    let owned: Vec<String> = sqlx::query_scalar(
-        "SELECT zernio_account_id FROM user_zernio_accounts WHERE user_id = $1",
-    )
-    .bind(user_id)
-    .fetch_all(&state.db_pool)
-    .await
-    .unwrap_or_default();
+    let owned: Vec<String> =
+        sqlx::query_scalar("SELECT zernio_account_id FROM user_zernio_accounts WHERE user_id = $1")
+            .bind(user_id)
+            .fetch_all(&state.db_pool)
+            .await
+            .unwrap_or_default();
     let mut targets: Vec<PlatformTarget> = match platforms_json {
         serde_json::Value::Array(arr) => arr
             .iter()
@@ -957,10 +1097,15 @@ async fn schedule_via_zernio(
                     return None;
                 }
                 if !owned.iter().any(|o| o == &account_id) {
-                    tracing::warn!("🚫 publish skipped: account {account_id} not owned by user {user_id}");
+                    tracing::warn!(
+                        "🚫 publish skipped: account {account_id} not owned by user {user_id}"
+                    );
                     return None;
                 }
-                Some(PlatformTarget { platform, accountId: account_id })
+                Some(PlatformTarget {
+                    platform,
+                    accountId: account_id,
+                })
             })
             .collect(),
         _ => Vec::new(),
@@ -996,11 +1141,10 @@ async fn schedule_via_zernio(
     // Re-presign from the stored key so the URL is fresh when Zernio fetches it.
     // S3 fallback URLs are only valid for the signing session (~6h); the stored
     // URL may be similarly stale by publish time.
-    let media_url = crate::handlers::admin::refresh_r2_presigned_url_from_existing(
-        state, media_url,
-    )
-    .await
-    .unwrap_or_else(|| media_url.to_string());
+    let media_url =
+        crate::handlers::admin::refresh_r2_presigned_url_from_existing(state, media_url)
+            .await
+            .unwrap_or_else(|| media_url.to_string());
 
     let media_items = vec![zernio_client::MediaItem {
         r#type: "video".to_string(),
@@ -1017,16 +1161,16 @@ async fn schedule_via_zernio(
 
     match zernio.create_post(&req).await {
         Ok(resp) => {
-            let _ = sqlx::query(
-                "UPDATE campaign_posts SET zernio_post_id = $1 WHERE id = $2",
-            )
-            .bind(&resp.post.id)
-            .bind(post.id)
-            .execute(&state.db_pool)
-            .await;
+            let _ = sqlx::query("UPDATE campaign_posts SET zernio_post_id = $1 WHERE id = $2")
+                .bind(&resp.post.id)
+                .bind(post.id)
+                .execute(&state.db_pool)
+                .await;
             tracing::info!(
                 "campaign post {} scheduled via Zernio (post_id={}, at={})",
-                post.id, resp.post.id, scheduled_for_clone
+                post.id,
+                resp.post.id,
+                scheduled_for_clone
             );
         }
         Err(e) => {
@@ -1037,7 +1181,11 @@ async fn schedule_via_zernio(
 
 // ── Zernio post status polling ──────────────────────────────────────────────
 
-async fn fetch_scheduled_posts(state: &Arc<AppState>, campaign_id: Uuid, limit: i32) -> Result<Vec<PostRow>, sqlx::Error> {
+async fn fetch_scheduled_posts(
+    state: &Arc<AppState>,
+    campaign_id: Uuid,
+    limit: i32,
+) -> Result<Vec<PostRow>, sqlx::Error> {
     sqlx::query_as::<_, (Uuid, Uuid, i32, i32, chrono::DateTime<chrono::Utc>, Option<String>, Option<String>, Option<chrono::DateTime<chrono::Utc>>)>(
         "SELECT id, campaign_id, day_number, slot_index, scheduled_at, status, zernio_post_id, published_at \
          FROM campaign_posts \
@@ -1068,8 +1216,12 @@ async fn fetch_scheduled_posts(state: &Arc<AppState>, campaign_id: Uuid, limit: 
 /// Poll Zernio for the actual status of a scheduled post. Updates the
 /// local campaign_post status to reflect publishing/partial/failed states.
 async fn check_zernio_post_status(state: &Arc<AppState>, campaign: &CampaignRow, post: PostRow) {
-    let Some(ref zernio) = state.zernio_client else { return };
-    let Some(ref zernio_post_id) = post.zernio_post_id else { return };
+    let Some(ref zernio) = state.zernio_client else {
+        return;
+    };
+    let Some(ref zernio_post_id) = post.zernio_post_id else {
+        return;
+    };
 
     let detail = match zernio.get_post(zernio_post_id).await {
         Ok(r) => r.post,
@@ -1084,7 +1236,8 @@ async fn check_zernio_post_status(state: &Arc<AppState>, campaign: &CampaignRow,
         zernio_client::PostStatus::PUBLISHED => "published",
         zernio_client::PostStatus::PARTIAL => {
             // Log which platforms succeeded and which failed
-            let failures: Vec<&str> = detail.platforms
+            let failures: Vec<&str> = detail
+                .platforms
                 .iter()
                 .filter(|p| p.status == zernio_client::PlatformStatus::FAILED)
                 .filter_map(|p| Some(p.errorMessage.as_deref().unwrap_or("unknown error")))
@@ -1092,7 +1245,8 @@ async fn check_zernio_post_status(state: &Arc<AppState>, campaign: &CampaignRow,
             if !failures.is_empty() {
                 tracing::warn!(
                     "campaign_post[{}] partial publish — failures: {:?}",
-                    post.id, failures
+                    post.id,
+                    failures
                 );
             }
             "published" // Partial is still publishable; surface failures in logs
@@ -1100,15 +1254,17 @@ async fn check_zernio_post_status(state: &Arc<AppState>, campaign: &CampaignRow,
         zernio_client::PostStatus::PUBLISHING | zernio_client::PostStatus::SCHEDULED => {
             // Still in flight — update per-platform statuses next cycle
             if post.status.as_deref() != Some("publishing") {
-                let _ = sqlx::query("UPDATE campaign_posts SET status = 'publishing' WHERE id = $1")
-                    .bind(post.id)
-                    .execute(&state.db_pool)
-                    .await;
+                let _ =
+                    sqlx::query("UPDATE campaign_posts SET status = 'publishing' WHERE id = $1")
+                        .bind(post.id)
+                        .execute(&state.db_pool)
+                        .await;
             }
             return; // Don't update counters yet
         }
         zernio_client::PostStatus::FAILED => {
-            let first_err = detail.platforms
+            let first_err = detail
+                .platforms
                 .iter()
                 .find(|p| p.status == zernio_client::PlatformStatus::FAILED);
             let err_msg = first_err
@@ -1119,13 +1275,17 @@ async fn check_zernio_post_status(state: &Arc<AppState>, campaign: &CampaignRow,
                 Ok(retry_resp) => {
                     tracing::info!(
                         "campaign_post[{}] Zernio retry initiated (post_id={}, status={:?})",
-                        post.id, zernio_post_id, retry_resp.post.status
+                        post.id,
+                        zernio_post_id,
+                        retry_resp.post.status
                     );
                     // Don't mark failed yet; next poll cycle will see the new status
-                    let _ = sqlx::query("UPDATE campaign_posts SET status = 'publishing' WHERE id = $1")
-                        .bind(post.id)
-                        .execute(&state.db_pool)
-                        .await;
+                    let _ = sqlx::query(
+                        "UPDATE campaign_posts SET status = 'publishing' WHERE id = $1",
+                    )
+                    .bind(post.id)
+                    .execute(&state.db_pool)
+                    .await;
                     return;
                 }
                 Err(e) => {
@@ -1138,11 +1298,17 @@ async fn check_zernio_post_status(state: &Arc<AppState>, campaign: &CampaignRow,
         }
         zernio_client::PostStatus::CANCELLED | zernio_client::PostStatus::DRAFT => {
             // These shouldn't happen in normal flow; log and leave as-is
-            tracing::warn!("campaign_post[{}] unexpected Zernio status: {api_status}", post.id);
+            tracing::warn!(
+                "campaign_post[{}] unexpected Zernio status: {api_status}",
+                post.id
+            );
             return;
         }
         _ => {
-            tracing::warn!("campaign_post[{}] unknown Zernio status: {api_status}", post.id);
+            tracing::warn!(
+                "campaign_post[{}] unknown Zernio status: {api_status}",
+                post.id
+            );
             return;
         }
     };
@@ -1165,18 +1331,18 @@ async fn check_zernio_post_status(state: &Arc<AppState>, campaign: &CampaignRow,
     );
 
     // Store per-platform results in delivery metadata
-    let delivery_id: Option<Uuid> = sqlx::query_scalar(
-        "SELECT delivery_id FROM campaign_posts WHERE id = $1",
-    )
-    .bind(post.id)
-    .fetch_optional(&state.db_pool)
-    .await
-    .ok()
-    .flatten()
-    .flatten();
+    let delivery_id: Option<Uuid> =
+        sqlx::query_scalar("SELECT delivery_id FROM campaign_posts WHERE id = $1")
+            .bind(post.id)
+            .fetch_optional(&state.db_pool)
+            .await
+            .ok()
+            .flatten()
+            .flatten();
 
     if let Some(did) = delivery_id {
-        let platform_results: Vec<serde_json::Value> = detail.platforms
+        let platform_results: Vec<serde_json::Value> = detail
+            .platforms
             .iter()
             .map(|p| {
                 json!({
@@ -1203,15 +1369,14 @@ async fn check_zernio_post_status(state: &Arc<AppState>, campaign: &CampaignRow,
 
     // Create skill from successful publish
     if new_local_status == "published" {
-        let caption: Option<String> = sqlx::query_scalar(
-            "SELECT caption FROM campaign_posts WHERE id = $1",
-        )
-        .bind(post.id)
-        .fetch_optional(&state.db_pool)
-        .await
-        .ok()
-        .flatten()
-        .flatten();
+        let caption: Option<String> =
+            sqlx::query_scalar("SELECT caption FROM campaign_posts WHERE id = $1")
+                .bind(post.id)
+                .fetch_optional(&state.db_pool)
+                .await
+                .ok()
+                .flatten()
+                .flatten();
 
         // Simple skill extraction from Zernio publish success
         let skill_prompt = format!(
@@ -1285,7 +1450,11 @@ async fn update_campaign_counts(state: &Arc<AppState>, campaign_id: Uuid) {
 /// - Twitch channels → fetches most recent VOD via Helix API
 /// - Kick streamers → returns as-is (yt-dlp resolves latest broadcast natively)
 /// - Direct video URLs → returned unchanged
-pub(crate) async fn resolve_latest_video_url(state: &Arc<AppState>, url: &str) -> Result<String, String> {    let trimmed = url.trim();
+pub(crate) async fn resolve_latest_video_url(
+    state: &Arc<AppState>,
+    url: &str,
+) -> Result<String, String> {
+    let trimmed = url.trim();
 
     // Direct video URLs — pass through (already a specific video)
     if is_direct_video_url(trimmed) {
@@ -1319,7 +1488,9 @@ pub(crate) async fn resolve_latest_video_url(state: &Arc<AppState>, url: &str) -
                     tracing::info!("Kick '{}' resolved to VOD page {}", slug, vod);
                     return Ok(vod);
                 }
-                Ok(None) => tracing::warn!("Kick '{}' has no finished VOD; falling back to HLS", slug),
+                Ok(None) => {
+                    tracing::warn!("Kick '{}' has no finished VOD; falling back to HLS", slug)
+                }
                 Err(e) => tracing::warn!("Kick VOD lookup failed for '{}': {}", slug, e),
             }
         }
@@ -1338,12 +1509,18 @@ pub(crate) async fn resolve_latest_video_url(state: &Arc<AppState>, url: &str) -
     // Twitch: https://twitch.tv/{channel}
     if let Some(channel) = parse_twitch_channel(trimmed) {
         if let Some(ref client) = state.twitch_client {
-            let user = client.get_user_by_login(&channel).await
+            let user = client
+                .get_user_by_login(&channel)
+                .await
                 .map_err(|e| format!("Twitch API error: {}", e))?
                 .ok_or_else(|| format!("Twitch channel '{}' not found", channel))?;
-            let (videos, _) = client.get_videos(&user.broadcaster_id, None, 1).await
+            let (videos, _) = client
+                .get_videos(&user.broadcaster_id, None, 1)
+                .await
                 .map_err(|e| format!("Twitch videos error: {}", e))?;
-            return videos.into_iter().next()
+            return videos
+                .into_iter()
+                .next()
                 .map(|v| v.url)
                 .ok_or_else(|| format!("No VODs found for Twitch channel '{}'", channel));
         }
@@ -1354,9 +1531,14 @@ pub(crate) async fn resolve_latest_video_url(state: &Arc<AppState>, url: &str) -
     if let Some(channel_id) = parse_youtube_channel_id(trimmed) {
         if let Some(ref client) = state.youtube_client {
             let uploads_id = uploads_playlist_id_for_channel(&channel_id);
-            let resp = client.get_channel_uploads(&uploads_id, 1).await
+            let resp = client
+                .get_channel_uploads(&uploads_id, 1)
+                .await
                 .map_err(|e| format!("YouTube API error: {}", e))?;
-            return resp.items.into_iter().next()
+            return resp
+                .items
+                .into_iter()
+                .next()
                 .map(|item| format!("https://youtube.com/watch?v={}", item.id.video_id))
                 .ok_or_else(|| format!("No uploads found for YouTube channel '{}'", channel_id));
         }
@@ -1366,14 +1548,24 @@ pub(crate) async fn resolve_latest_video_url(state: &Arc<AppState>, url: &str) -
     // YouTube handle: youtube.com/@handle — needs a channel search first
     if let Some(handle) = parse_youtube_handle(trimmed) {
         if let Some(ref client) = state.youtube_client {
-            let resp = client.search_channels(None, &handle, 1, None).await
+            let resp = client
+                .search_channels(None, &handle, 1, None)
+                .await
                 .map_err(|e| format!("YouTube search error: {}", e))?;
-            let channel = resp.items.into_iter().next()
+            let channel = resp
+                .items
+                .into_iter()
+                .next()
                 .ok_or_else(|| format!("YouTube channel '@{}' not found", handle))?;
             let uploads_id = uploads_playlist_id_for_channel(&channel.id.channel_id);
-            let uploads = client.get_channel_uploads(&uploads_id, 1).await
+            let uploads = client
+                .get_channel_uploads(&uploads_id, 1)
+                .await
                 .map_err(|e| format!("YouTube uploads error: {}", e))?;
-            return uploads.items.into_iter().next()
+            return uploads
+                .items
+                .into_iter()
+                .next()
                 .map(|item| format!("https://youtube.com/watch?v={}", item.id.video_id))
                 .ok_or_else(|| format!("No uploads found for YouTube channel '@{}'", handle));
         }
@@ -1447,8 +1639,13 @@ async fn store_campaign_post_embedding(
     output_url: &str,
     delivery_id: &Uuid,
 ) {
-    let Some(ref qdrant) = state.qdrant_client else { return };
-    let gemini = state.video_gemini_client.as_ref().or(state.gemini_client.as_ref());
+    let Some(ref qdrant) = state.qdrant_client else {
+        return;
+    };
+    let gemini = state
+        .video_gemini_client
+        .as_ref()
+        .or(state.gemini_client.as_ref());
     let Some(ref gemini) = gemini else { return };
 
     // Read the variation prompt and caption from the post/delivery
@@ -1473,11 +1670,20 @@ async fn store_campaign_post_embedding(
     );
 
     let mut context = std::collections::HashMap::new();
-    context.insert("campaign_name".to_string(), serde_json::json!(campaign.name));
-    context.insert("service_type".to_string(), serde_json::json!(campaign.service_type));
+    context.insert(
+        "campaign_name".to_string(),
+        serde_json::json!(campaign.name),
+    );
+    context.insert(
+        "service_type".to_string(),
+        serde_json::json!(campaign.service_type),
+    );
     context.insert("day_number".to_string(), serde_json::json!(post.day_number));
     context.insert("output_url".to_string(), serde_json::json!(output_url));
-    context.insert("delivery_id".to_string(), serde_json::json!(delivery_id.to_string()));
+    context.insert(
+        "delivery_id".to_string(),
+        serde_json::json!(delivery_id.to_string()),
+    );
 
     if let Err(e) = qdrant
         .store_chat_memory_with_gemini2(
@@ -1492,7 +1698,11 @@ async fn store_campaign_post_embedding(
         )
         .await
     {
-        tracing::warn!("campaign[{}] post[{}]: embedding store failed: {e}", campaign.id, post.id);
+        tracing::warn!(
+            "campaign[{}] post[{}]: embedding store failed: {e}",
+            campaign.id,
+            post.id
+        );
     }
 }
 
