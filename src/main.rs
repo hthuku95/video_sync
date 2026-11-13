@@ -1087,12 +1087,19 @@ async fn main() {
         .merge(handlers::admin::payment_method_routes())
         .merge(handlers::background_routes::background_routes())
         .merge(handlers::jobs::job_routes()) // 🆕 Job control endpoints
-        .merge(handlers::youtube::youtube_routes()) // 📺 YouTube integration
-        .merge(handlers::clipping::clipping_routes()) // 📹 YouTube clipping feature
+        .merge(handlers::youtube::youtube_routes()) // 📺 YouTube integration (whitelist-only: channel connect + management + education posting)
+        // Clipping feature REMOVED from the YouTube-API system (owner directive
+        // Nov 13 2026): Zernio campaigns now own clipping (Kick / clips.videosync.ink /
+        // shorts.videosync.ink). This system becomes education-posting only. The
+        // clipping handlers remain compiled for the Zernio campaign engine, but the
+        // whitelisted legacy clipping UI/API is unmounted.
+        // .merge(handlers::clipping::clipping_routes())
         .merge(handlers::health::health_routes()) // 🏥 Health check and monitoring
         .merge(handlers::tools::tools_routes()) // 🎬 On-demand FFmpeg tools
         .merge(handlers::gig_templates::gig_template_routes()) // 💼 Gig templates
-        .merge(handlers::manual_clipping::manual_clipping_routes()) // ✂️ Manual clipping
+        // Manual clipping REMOVED (owner directive Nov 13 2026) — same reason as
+        // above; the manual_clipping module stays for reference.
+        // .merge(handlers::manual_clipping::manual_clipping_routes())
         .merge(handlers::prospects::prospect_routes()) // 🎯 Prospect finder (admin)
         .merge(handlers::prospects::instagram_routes()) // 📸 Instagram leads (whitelisted content machine users only)
         .merge(handlers::referrals::referral_routes()) // 🔗 Referral codes + commissions for content machine users

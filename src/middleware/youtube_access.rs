@@ -1,4 +1,3 @@
-use crate::models::admin::SystemSetting;
 use crate::models::auth::Claims;
 use crate::AppState;
 use axum::{
@@ -36,33 +35,9 @@ pub async fn youtube_access_middleware(
         return Ok(next.run(request).await);
     }
 
-    // Check if YouTube features are enabled globally
-    let setting = sqlx::query_as::<_, SystemSetting>(
-        "SELECT * FROM system_settings WHERE setting_key = 'youtube_features_enabled'",
-    )
-    .fetch_optional(&state.db_pool)
-    .await
-    .map_err(|e| {
-        tracing::error!("Failed to check YouTube feature setting: {}", e);
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({
-                "success": false,
-                "message": "Failed to check feature availability"
-            })),
-        )
-    })?;
-
-    let features_enabled = setting
-        .map(|s| s.as_bool().unwrap_or(false))
-        .unwrap_or(false);
-
-    if features_enabled {
-        // Feature is enabled for everyone
-        return Ok(next.run(request).await);
-    }
-
-    // Feature is disabled - check whitelist
+    // Whitelist-only (owner directive Nov 13 2026): the youtube_features_enabled
+    // toggle bypass was REMOVED — this system is not customer-facing. Access is
+    // admins/staff and whitelisted emails, ALWAYS.
     let is_whitelisted = sqlx::query_scalar::<_, bool>(
         "SELECT EXISTS(SELECT 1 FROM whitelist_emails WHERE email = $1)",
     )
