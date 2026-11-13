@@ -4390,7 +4390,7 @@ pub async fn list_education_linkages(
                 "channel_db_id": id,
                 "channel_name": name,
                 "youtube_channel_id": yt_id,
-                "topic": topic.unwrap_or_else(|| "History".to_string()),
+                "topic": topic.clone().unwrap_or_else(|| "History".to_string()),
                 "is_default_topic": topic.as_deref().map(|t| t == "History").unwrap_or(true),
                 "linked_at": created,
             })

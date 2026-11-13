@@ -5348,6 +5348,7 @@ async fn execute_generate_long_form_video_value(
             source_record_id: None,
             idempotency_key,
             reference_images: vec![],
+        nim_profile: None,
         },
     )
     .await

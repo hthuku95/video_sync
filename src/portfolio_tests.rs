@@ -650,6 +650,7 @@ impl PortfolioTestRunner {
                 source_record_id: Some(delivery_id),
                 idempotency_key: Some(format!("test-run:{}", scenario.slug)),
                 reference_images: vec![],
+                nim_profile: None,
             },
         })
     }
@@ -686,6 +687,7 @@ impl PortfolioTestRunner {
                 source_record_id: Some(delivery_id),
                 idempotency_key: Some(format!("test-run:{}", scenario.slug)),
                 reference_images: vec![],
+                nim_profile: None,
             },
         })
     }

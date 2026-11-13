@@ -4674,6 +4674,7 @@ async fn generate_prospect_sample_pack(
             source_record_id: Some(delivery_id),
             idempotency_key: Some(format!("prospect-sample-agentic:{id}")),
             reference_images: vec![],
+        nim_profile: None,
         },
     )
     .await
@@ -8224,6 +8225,7 @@ async fn instagram_generate_sample(
             source_record_id: Some(delivery_id),
             idempotency_key: Some(format!("instagram-lead-long-form:{id}")),
             reference_images: vec![],
+        nim_profile: None,
         };
         match crate::services::AgenticServicePipeline::start(
             state.clone(),
