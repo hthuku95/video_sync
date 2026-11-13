@@ -55,10 +55,26 @@ pub async fn generate_text_fast(
     gemini: Option<&GeminiClient>,
     prompt: &str,
 ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-    let nim = std::env::var("NVIDIA_API_KEY")
-        .ok()
-        .filter(|k| !k.trim().is_empty())
-        .map(NvidiaNimClient::new);
+    generate_text_fast_with_nim(qwen, deepseek, gemini, None, prompt).await
+}
+
+/// Variant with an explicit NIM override (owner directive Nov 13 2026):
+/// `nim` Some(_) is used FIRST (e.g. the dedicated education key), otherwise
+/// the shared NVIDIA_API_KEY fast path applies. Same fallback order after it:
+/// Qwen -> DeepSeek -> Gemini.
+pub async fn generate_text_fast_with_nim(
+    qwen: Option<&QwenClient>,
+    deepseek: Option<&DeepSeekClient>,
+    gemini: Option<&GeminiClient>,
+    nim_override: Option<&NvidiaNimClient>,
+    prompt: &str,
+) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+    let nim = nim_override.cloned().or_else(|| {
+        std::env::var("NVIDIA_API_KEY")
+            .ok()
+            .filter(|k| !k.trim().is_empty())
+            .map(NvidiaNimClient::new)
+    });
 
     try_provider!(
         nim.as_ref(),

@@ -199,6 +199,12 @@ pub struct ServiceInput {
     pub source_record_id: Option<Uuid>,
     pub idempotency_key: Option<String>,
     pub reference_images: Vec<String>,
+    /// NIM profile override (owner directive Nov 13 2026): when "education",
+    /// the run uses the dedicated NVIDIA_API_KEY_EDUCATION key instead of the
+    /// shared NIM key — education-posting jobs must not consume the main
+    /// key's 40 RPM. Serde default keeps every existing caller compatible.
+    #[serde(default)]
+    pub nim_profile: Option<String>,
 }
 
 impl ServiceInput {
@@ -553,10 +559,33 @@ impl AgenticServicePipeline {
                 ));
             }
 
+            // NIM profile override (owner directive Nov 13 2026): education-post
+            // runs use the dedicated NVIDIA_API_KEY_EDUCATION key so the shared
+            // NIM key keeps its full 40 RPM budget. Falls back to the main
+            // client when the profile is unset or the env key is missing.
+            let nim_for_run: Option<Arc<crate::nvidia_nim_client::NvidiaNimClient>> = match input
+                .nim_profile
+                .as_deref()
+            {
+                Some("education") => match std::env::var("NVIDIA_API_KEY_EDUCATION") {
+                    Ok(k) if !k.trim().is_empty() => {
+                        Some(Arc::new(crate::nvidia_nim_client::NvidiaNimClient::new(k)))
+                    }
+                    _ => {
+                        tracing::warn!(
+                            workflow_id = %workflow_id,
+                            "nim_profile=education but NVIDIA_API_KEY_EDUCATION unset — using main NIM key"
+                        );
+                        state.nvidia_nim_client.clone().map(Arc::new)
+                    }
+                },
+                _ => state.nvidia_nim_client.clone().map(Arc::new),
+            };
+
             let agent = crate::agent::stateful_agent::StatefulGeminiAgent::new_with_nvidia(
                 gemini_client.clone(),
                 state.bedrock_client.clone(),
-                state.nvidia_nim_client.clone().map(Arc::new),
+                nim_for_run,
                 ollama_client.clone(),
             )
             .with_tool_scope(Some(service_type.as_str().to_string()));
@@ -2107,10 +2136,19 @@ async fn generate_execution_plan(
         delivery_id = input.delivery_id,
     );
 
-    crate::llm_utils::generate_text_fast(
+    // NIM profile override: education-post runs plan with the dedicated key.
+    let edu_nim = match input.nim_profile.as_deref() {
+        Some("education") => std::env::var("NVIDIA_API_KEY_EDUCATION")
+            .ok()
+            .filter(|k| !k.trim().is_empty())
+            .map(crate::nvidia_nim_client::NvidiaNimClient::new),
+        _ => None,
+    };
+    crate::llm_utils::generate_text_fast_with_nim(
         state.qwen_client.as_ref(),
         state.deepseek_client.as_ref(),
         state.gemini_client.as_ref(),
+        edu_nim.as_ref(),
         &prompt,
     )
     .await

@@ -209,6 +209,14 @@ pub fn youtube_routes() -> Router {
             "/api/youtube/upload/resumable/:upload_id/chunk",
             put(upload_chunk),
         )
+        // Education-posting linkages (owner directive Nov 13 2026): topic ↔
+        // channel replaces the old source↔destination clipping linkage.
+        .route("/api/education/linkages", get(list_education_linkages))
+        .route(
+            "/api/education/linkages/:channel_id",
+            post(set_education_linkage_topic),
+        )
+        .route("/api/education/topics", get(get_education_topic_menu))
         .layer(axum::middleware::from_fn(
             crate::middleware::youtube_access::youtube_access_middleware,
         ))
@@ -4345,4 +4353,140 @@ pub async fn youtube_coming_soon_page() -> Html<String> {
     "###;
 
     Html(html.to_string())
+}
+
+// ── Education-posting linkages (owner directive Nov 13 2026) ────────────────
+
+/// GET /api/education/linkages — the caller's channels with their education
+/// topic linkage (History default).
+pub async fn list_education_linkages(
+    Extension(state): Extension<Arc<AppState>>,
+    Extension(claims): Extension<crate::models::auth::Claims>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let user_id = claims.sub.parse::<i32>().unwrap_or(0);
+    let rows = sqlx::query_as::<_, (i32, String, String, Option<String>, Option<String>)>(
+        r#"
+        SELECT c.id, c.channel_name, c.channel_id, el.topic, el.created_at::text
+        FROM connected_youtube_channels c
+        LEFT JOIN education_linkages el ON el.connected_channel_id = c.id
+        WHERE c.user_id = $1
+        ORDER BY c.created_at DESC
+        "#,
+    )
+    .bind(user_id)
+    .fetch_all(&state.db_pool)
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"success": false, "message": format!("Database error: {e}")})),
+        )
+    })?;
+
+    let linkages: Vec<serde_json::Value> = rows
+        .into_iter()
+        .map(|(id, name, yt_id, topic, created)| {
+            json!({
+                "channel_db_id": id,
+                "channel_name": name,
+                "youtube_channel_id": yt_id,
+                "topic": topic.unwrap_or_else(|| "History".to_string()),
+                "is_default_topic": topic.as_deref().map(|t| t == "History").unwrap_or(true),
+                "linked_at": created,
+            })
+        })
+        .collect();
+
+    Ok(Json(json!({"success": true, "linkages": linkages})))
+}
+
+/// POST /api/education/linkages/:channel_id {"topic": "..."} — set or change
+/// the education topic for one of the caller's connected channels. Accepts
+/// menu topics or custom user-typed topics.
+#[derive(Deserialize)]
+pub struct SetEducationTopicRequest {
+    pub topic: String,
+}
+
+pub async fn set_education_linkage_topic(
+    Extension(state): Extension<Arc<AppState>>,
+    Extension(claims): Extension<crate::models::auth::Claims>,
+    Path(channel_db_id): Path<i32>,
+    Json(payload): Json<SetEducationTopicRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let user_id = claims.sub.parse::<i32>().unwrap_or(0);
+    let topic = payload.topic.trim();
+    if topic.is_empty() || topic.chars().count() > 120 {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({"success": false, "message": "topic must be 1-120 characters"})),
+        ));
+    }
+
+    // Ownership check
+    let owned: Option<i32> = sqlx::query_scalar(
+        "SELECT id FROM connected_youtube_channels WHERE id = $1 AND user_id = $2",
+    )
+    .bind(channel_db_id)
+    .bind(user_id)
+    .fetch_optional(&state.db_pool)
+    .await
+    .map_err(|_| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"success": false, "message": "Database error"})),
+        )
+    })?;
+    if owned.is_none() {
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(json!({"success": false, "message": "Channel not found"})),
+        ));
+    }
+
+    sqlx::query(
+        r#"
+        INSERT INTO education_linkages (connected_channel_id, topic, is_default, created_by)
+        VALUES ($1, $2, FALSE, $3)
+        ON CONFLICT (connected_channel_id)
+        DO UPDATE SET topic = $2, is_default = FALSE, updated_at = NOW()
+        "#,
+    )
+    .bind(channel_db_id)
+    .bind(topic)
+    .bind(user_id)
+    .execute(&state.db_pool)
+    .await
+    .map_err(|_| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"success": false, "message": "Failed to set topic"})),
+        )
+    })?;
+
+    Ok(Json(json!({"success": true, "topic": topic})))
+}
+
+/// GET /api/education/topics — the predefined topic menu (admin-editable
+/// setting; users may also type custom topics).
+pub async fn get_education_topic_menu(
+    Extension(state): Extension<Arc<AppState>>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let raw: Option<String> = sqlx::query_scalar(
+        "SELECT setting_value FROM system_settings WHERE setting_key = 'education_topic_menu'",
+    )
+    .fetch_optional(&state.db_pool)
+    .await
+    .map_err(|_| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"success": false, "message": "Database error"})),
+        )
+    })?;
+    let topics: serde_json::Value = raw
+        .and_then(|v| serde_json::from_str(&v).ok())
+        .unwrap_or_else(|| json!(["History"]));
+    Ok(Json(
+        json!({"success": true, "topics": topics, "default": "History"}),
+    ))
 }

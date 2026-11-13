@@ -15,6 +15,7 @@ pub mod analytics_sync_job;
 pub mod clipping_job;
 pub mod clipping_supervisor;
 pub mod clipping_worker;
+pub mod education_post_worker;
 pub mod error_classifier;
 pub mod job_claimer;
 pub mod manual_clipping_job;

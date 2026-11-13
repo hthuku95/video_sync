@@ -865,6 +865,40 @@ async fn main() {
         },
     });
 
+    // ── EDUCATION_WORKER: dedicated education-posting worker (owner directive
+    // Nov 13 2026). Runs on its own Render worker service (`vs-edu-worker`):
+    // schedules + generates educational videos and posts them to the connected
+    // YouTube channels of whitelisted users. Skips the HTTP server entirely.
+    if std::env::var("EDUCATION_WORKER").as_deref() == Ok("true") {
+        tracing::info!(
+            "🎓 EDUCATION_WORKER enabled — running education-posting worker only, no HTTP server"
+        );
+        let worker_state = shared_state.clone();
+        std::thread::spawn(move || loop {
+            let state = worker_state.clone();
+            let handle = std::thread::spawn(move || {
+                let rt = tokio::runtime::Runtime::new()
+                    .expect("Failed to create tokio runtime for education worker");
+                rt.block_on(async move {
+                    jobs::education_post_worker::run_education_worker_loop(state).await
+                });
+            });
+            match handle.join() {
+                Ok(_) => tracing::warn!("⚠️ Education worker exited. Restarting in 5s..."),
+                Err(e) => {
+                    tracing::error!("💥 Education worker panicked: {:?}. Restarting in 5s...", e)
+                }
+            }
+            std::time::Duration::from_secs(5);
+            std::thread::sleep(std::time::Duration::from_secs(5));
+        });
+
+        // Block forever: this process IS the education worker.
+        loop {
+            tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
+        }
+    }
+
     // ── WORKER_MODE: skip HTTP server, run only clipping worker ──────────
     if std::env::var("WORKER_MODE").as_deref() == Ok("true") {
         tracing::info!("🧵 WORKER_MODE enabled — running clipping worker only, no HTTP server");

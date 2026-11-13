@@ -111,6 +111,10 @@ pub fn admin_routes() -> Router {
         .route("/api/admin/youtube/status", get(get_youtube_feature_status))
         .route("/api/admin/youtube/toggle", post(toggle_youtube_features))
         .route(
+            "/api/admin/education-schedule",
+            get(get_education_schedule).post(set_education_schedule),
+        )
+        .route(
             "/api/admin/clipping/auto-toggle/status",
             get(get_auto_clipping_status),
         )
@@ -3606,6 +3610,68 @@ pub async fn get_youtube_feature_status(
             "enabled": enabled,
             "description": "When enabled, all users can access YouTube features. When disabled, only admins and whitelisted users have access."
         }
+    })))
+}
+
+#[derive(Deserialize)]
+pub struct EducationScheduleRequest {
+    /// Videos per connected channel per day: 0.5 = 1 every 2 days (start),
+    /// up to 4.0 (the future full rate).
+    pub per_channel_per_day: f64,
+}
+
+/// GET /api/admin/education-schedule — current education-posting rate.
+pub async fn get_education_schedule(
+    Extension(state): Extension<Arc<AppState>>,
+    Extension(claims): Extension<Claims>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    if !claims.is_staff && !claims.is_superuser {
+        return Err(StatusCode::FORBIDDEN);
+    }
+    let value: Option<String> = sqlx::query_scalar(
+        "SELECT setting_value FROM system_settings WHERE setting_key = 'education_videos_per_channel_per_day'",
+    )
+    .fetch_optional(&state.db_pool)
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let per_day: f64 = value.and_then(|v| v.parse().ok()).unwrap_or(0.5);
+    Ok(Json(serde_json::json!({
+        "success": true,
+        "per_channel_per_day": per_day,
+        "cadence_label": if per_day >= 1.0 {
+            format!("{:.0} video(s) per day per channel", per_day)
+        } else {
+            format!("1 video every {:.0} day(s) per channel", 1.0 / per_day)
+        },
+    })))
+}
+
+/// POST /api/admin/education-schedule — set the rate (owner: start 0.5/day,
+/// raise to 4 when compute allows). Accepts 0.1..=4.0.
+pub async fn set_education_schedule(
+    Extension(state): Extension<Arc<AppState>>,
+    Extension(claims): Extension<Claims>,
+    Json(payload): Json<EducationScheduleRequest>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    if !claims.is_staff && !claims.is_superuser {
+        return Err(StatusCode::FORBIDDEN);
+    }
+    let rate = payload.per_channel_per_day.clamp(0.1, 4.0);
+    sqlx::query(
+        "INSERT INTO system_settings (setting_key, setting_value, setting_type, description, updated_by, updated_at)
+         VALUES ('education_videos_per_channel_per_day', $1, 'number',
+                 'Education videos generated+posted per connected channel per day.', $2, NOW())
+         ON CONFLICT (setting_key)
+         DO UPDATE SET setting_value = $1, updated_by = $2, updated_at = NOW()",
+    )
+    .bind(format!("{rate}"))
+    .bind(claims.sub.parse::<i32>().unwrap_or(0))
+    .execute(&state.db_pool)
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(serde_json::json!({
+        "success": true,
+        "per_channel_per_day": rate,
     })))
 }
 
@@ -8274,7 +8340,11 @@ pub async fn delivery_progress(
                 // render exceeds its 25-min budget, don't pin "1 minute" for
                 // the rest of time — report the overrun explicitly.
                 let over = elapsed_min >= 25;
-                eta_minutes = if over { 1 } else { std::cmp::max(1, 25 - elapsed_min) };
+                eta_minutes = if over {
+                    1
+                } else {
+                    std::cmp::max(1, 25 - elapsed_min)
+                };
                 if over {
                     detail = format!(
                         "{} Taking longer than usual — the team is on it; you'll see the moment it's ready.",
