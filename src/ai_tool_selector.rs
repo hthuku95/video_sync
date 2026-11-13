@@ -307,9 +307,13 @@ fn service_tool_names(scope: &str) -> Option<Vec<&'static str>> {
         // Manim for math/diagrams/charts, Blender only for true 3D, mixed
         // scenes joined with merge_videos → narrate → post-production → review.
         "education" => vec![
+            "browserbase_crawl_website",
+            "vectorize_crawled_content",
+            "search_crawled_content",
             "generate_video_script",
             "generate_narration",
             "hyperframes_render",
+            "polyfork_search_assets",
             "manim_execute_script",
             "merge_videos",
             "trim_video",

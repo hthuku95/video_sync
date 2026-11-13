@@ -1328,8 +1328,15 @@ Style: {style}
 ## ⚠️ CRITICAL: DO NOT USE generate_long_form_video
 That tool delegates to another agent and will NOT produce the correct educational video. Render directly.
 
+## STEP 0: RESEARCH THE TOPIC (do this FIRST — facts come from real sources)
+Before writing anything, research the topic using the web-crawling infrastructure:
+1. Identify 1-3 authoritative source URLs for the topic and call `browserbase_crawl_website(url=...)` on each. Construct canonical URLs directly (e.g. `https://en.wikipedia.org/wiki/<Topic>`, Britannica or Khan Academy for the niche). For History topics prefer Wikipedia + Britannica/World History Encyclopedia.
+2. Call `vectorize_crawled_content(feature_tag="<the response's feature_tag>", pages=<pages array>)` to store the research.
+3. Call `search_crawled_content(query="key facts: dates, names, numbers, causes, consequences", feature_tag="<tag>")` to pull what the lesson needs.
+4. GROUNDING RULE: every date, name, number, and factual claim in the script MUST come from this research (or be well-established common knowledge). Never invent specifics. If crawling fails entirely, say so in your plan and fall back to well-established knowledge — no fabricated specifics.
+
 ## MANDATORY TOOL SEQUENCE (NARRATION-FIRST — DO NOT SKIP OR REORDER)
-1. generate_video_script(topic="{brief}", duration={duration_seconds}, style="{style}", tone="professional"). Split the lesson into {scene_count} scenes (≈20-25s each), one short narration line per scene. NARRATION DENSITY: for a scene of T seconds its narration must run ~T×0.6 seconds of speech (≈30-38 words per 15s scene). Target 70-85% speech coverage for the whole video — dense but breathable (leave the 0.35s line gaps, a beat after the hook, and a hold on the final CTA; never wall-to-wall talking). Hard floor: coverage below 60% is a quality failure. Each scene's plan MUST also name the HyperFrames features it will use (menu: VFX shaders, Slug kinetic typography, d3 charts, GSAP timelines, Lottie, audio-reactive motion, masks, CSS perspective/parallax) — the whole lesson must use at least 3 distinct features and no two consecutive scenes may use an identical feature set.
+1. generate_video_script(topic="{brief}", duration={duration_seconds}, style="{style}", tone="professional"). Split the lesson into {scene_count} scenes (≈20-25s each), one short narration line per scene. NARRATION DENSITY: for a scene of T seconds its narration must run ~T×0.6 seconds of speech (≈30-38 words per 15s scene). Target 70-85% speech coverage for the whole video — dense but breathable (leave the 0.35s line gaps, a beat after the hook, and a hold on the final CTA; never wall-to-wall talking). Hard floor: coverage below 60% is a quality failure. Each scene's plan MUST also name the HyperFrames features it will use (menu: VFX shaders, Slug kinetic typography, d3 charts, GSAP timelines, Lottie, audio-reactive motion, masks, CSS perspective/parallax) — the whole lesson must use at least 3 distinct features and no two consecutive scenes may use an identical feature set. Ground every factual claim in the Step 0 research.
 2. generate_narration(lines=[...], voice="Emma", output_file="{out}/narration.mp3", gap_seconds=0.35) — synthesize the voice track and get the exact SCENE_TIMELINE_JSON. This is the clock for the whole lesson. Call it ONCE with all scene lines. If it errors, fix the arguments and retry once; do NOT fall back to per-line generate_text_to_speech and do NOT call auto_generate_video. Then SELF-CHECK density from SCENE_TIMELINE_JSON: (sum of scene speech durations ÷ {duration_seconds}) must be ≥ 0.6 (target 0.70–0.85) — if it is lower, rewrite the scene lines denser and re-run generate_narration BEFORE rendering anything.
 3. Render each scene to EXACTLY its timeline duration:
    - hyperframes_render(html=..., resolution=...) — for titles, kinetic typography, layouts, animated backgrounds, intro/outro sequences, and ALL 2D/3D motion graphics. You have FULL access to every HyperFrames feature — use them freely and creatively: 50+ cinematic VFX shaders (glitch, film grain, chromatic aberration, bloom, halftone, CRT, etc.), Slug GPU vector typography (word-by-word kinetic reveals), d3 animated charts and data visualizations, a unified 3D scene graph with glTF import and PBR materials, GSAP timelines, Lottie animation playback, audio visualization/reactive motion, transitions, masks, and CSS perspective/parallax. Pick whichever combination best serves the lesson content. Its root data-duration and scene data-start/data-duration MUST equal the timeline. CPU-rendered, no GPU needed. Implement EVERY feature named in each scene's plan — a scene whose HTML ignores its planned features is a quality failure.
@@ -2033,7 +2040,7 @@ async fn generate_execution_plan(
     let tool_hints = match service_type {
         ServiceType::Clipping => "generate_clip_compilation (downloads + extracts + captions clips), kick_post_processing happens automatically; final artifacts are clip URLs",
         ServiceType::LandingPage => "browserbase_crawl_website (read the source site first), generate_video_script, generate_narration (audio-first timing), hyperframes_render, add_audio, review_video, submit_final_answer",
-        ServiceType::Education => "generate_video_script, generate_narration (audio-first timing), hyperframes_render, manim_execute_script (only for equations/diagrams/LaTeX), merge_videos, add_audio, review_video, submit_final_answer",
+        ServiceType::Education => "browserbase_crawl_website (research the topic from authoritative sources FIRST), vectorize_crawled_content, search_crawled_content, generate_video_script, generate_narration (audio-first timing), hyperframes_render, manim_execute_script (only for equations/diagrams/LaTeX), merge_videos, add_audio, review_video, submit_final_answer",
         // Tailored TOOL chains for the other narrative services (owner
         // directive Nov 13 2026): every plan must reflect how ITS video type
         // is built. Feature narrowing is NOT allowed — every hyperframes_render
@@ -2177,8 +2184,18 @@ fn canned_plan(service_type: ServiceType, delivery_id: Uuid) -> String {
             "review_video(output.mp4) -> QA pass",
             "submit_final_answer(output.mp4) -> delivered video",
         ],
+        ServiceType::Education => &[
+            "browserbase_crawl_website(topic source URLs) -> researched facts",
+            "vectorize_crawled_content + search_crawled_content -> grounded fact set",
+            "generate_video_script(grounded facts, brief) -> scene plan",
+            "generate_narration(scene lines) -> narration.mp3 + timeline",
+            "hyperframes_render(scene compositions) -> visuals.mp4",
+            "merge_videos(scene clips) -> merged.mp4",
+            "add_audio(merged, narration) -> output.mp4",
+            "review_video(output.mp4) -> QA pass",
+            "submit_final_answer(output.mp4) -> delivered video",
+        ],
         ServiceType::BusinessExplainer
-        | ServiceType::Education
         | ServiceType::InvestorPitch
         | ServiceType::IsometricExplainer
         | ServiceType::AnimatedInfographic
