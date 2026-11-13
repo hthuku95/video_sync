@@ -1752,7 +1752,15 @@ Use ONLY manim_execute_script for ALL visual content — every render call uploa
 ## MANDATORY TOOL SEQUENCE
 1. generate_video_script(topic="{brief}", duration={duration}, style="whiteboard hand-drawn", tone="friendly educational") — split into scenes ~20-25s each, one short narration line per scene. NARRATION DENSITY: target 70-85% speech coverage (hard floor 60%) — for a scene of T seconds its narration must run ~T*0.6s of speech. Then SELF-CHECK from SCENE_TIMELINE_JSON: (sum of speech / duration) >= 0.6 — if lower, rewrite the lines denser and re-run generate_narration BEFORE rendering.
 2. generate_narration(lines=[<one line per scene>], voice="Emma", output_file="{out}/narration.mp3", gap_seconds=0.35) — AUDIO-FIRST: this call returns the exact SCENE_TIMELINE_JSON that is the clock for the whole video. Call it ONCE with all scene lines; if it errors, fix the arguments and retry once. NEVER use add_voiceover_to_video or generate_text_to_speech for this service.
-3. Render each scene to EXACTLY its timeline duration: hyperframes_render(html=..., resolution=...) — FULL HyperFrames feature access (stroke/draw-on styling via masks, GSAP, shaders). Its root data-duration and every scene's data-start/data-duration MUST equal the timeline.
+3. Render each scene to EXACTLY its timeline duration — WHITEBOARD GRAMMAR (RSA-Animate style, measured from real films — pick ONE variant and never mix):
+   a. RSA type (default): ONE large whiteboard for the whole video, the CAMERA moves across it between arguments (≈5 camera moves/min). Smooth moves shift only ~0.23 frame-width at a time so old and new blocks overlap ~75% (the viewer always knows where they are on one big board). Long jumps use a 0.8s whip-pan with directional motion blur. END with a zoom-out revealing the whole board as one argument map.
+   b. MinutePhysics type: one paper page per shot, HARD page cuts between shots (≈8/min), camera static.
+   c. Colors: near-white board #FBFBFB, near-black lines #0A0503, exactly ONE accent color for keywords (orange #EF7226 or the brand's accent) — ~20% of drawn pixels, keywords + hatching only. Line width ≈0.65% of frame height (~7px at 1080p). Solid lines = established facts, dashed = plans/projections.
+   d. Hand: a right hand with black marker enters from the BOTTOM-RIGHT, covers 15-25% of frame ONLY while drawing, exits fully when idle (~50% of screen time). The pen LEADS the line: full line-art hidden underneath, revealed behind the pen tip (zigzag reveal-mask) — never lines appearing without the pen, never multi-stroke pop-in.
+   e. Sync with narration (the magic): writing starts ~0.5s AFTER the matching phrase starts speaking, finishes within ~1s after the phrase ends — write WITH the voiceover, slightly behind, never ahead. Writing speed ≈ narration speed (~16 chars/s body; titles half speed). Complex illustrations are NOT drawn live: pre-drawn, camera reveals them.
+   f. Board blocks: 3-6 text+icon blocks per visible board section; rotate block templates (comparison | arrow-flow | detail-zoom | one-big-image) — never the same block shape 3x in a row. Draw MORE, write LESS: if >50% of on-screen words duplicate the narration text, redraw as objects.
+   g. Accent keywords may pop in without the hand (0.3s backOut). Camera holds while the viewer reads or content animates itself; hold-then-move is correct pacing, not lag.
+   Renderer: hyperframes_render (FULL HyperFrames feature access for masks, reveals, GSAP camera moves). Its root data-duration and every scene's data-start/data-duration MUST equal the timeline.
 4. merge_videos the scene clips in narration order, then add_audio(input_file="{out}/merged.mp4", audio_file="{out}/narration.mp3", output_file="{out}/output.mp4").
 5. review_video(video_path_or_url="{out}/output.mp4", original_request="whiteboard animation {title}", expected_features=["audible narration","scene changes stay in sync with narration","no cropped or overflowing text","every scene implements the HyperFrames features named in its plan"]) — this runs the timestamped AV-sync QA; fix ONLY the flagged timestamps if it fails.
 6. submit_final_answer(summary="whiteboard animation {title}", output_files=["{out}/output.mp4"])
@@ -2060,7 +2068,20 @@ async fn generate_execution_plan(
          persistent subject and a moving camera; scenes cut on motion (never fade-sections);\n\
          no page chrome (no corner labels/counters/timecodes/progress bars); text lives\n\
          inside the scene world, max 2 text levels, >=30px on 1080-wide; entries decelerate\n\
-         in, exits accelerate out, nothing grows from zero; end card <=2s.\n\n\
+         in, exits accelerate out, nothing grows from zero; end card <=2s.\n\
+         DIRECTOR RULES (huashu-art-motion-derived): camera language is punctuation, not\n\
+         decoration — if the content itself moves, HOLD the camera; slow moves for\n\
+         transitions (push/pan/pull-out), fast moves ONLY for reveals/twists/key numbers\n\
+         (a handful per video, never 3 pushes in a row — push in then come back out);\n\
+         shots run 2-6s with a concrete OBJECT doing a concrete ACTION in every scene\n\
+         (no abstract concepts as floating icons); ONE art style + ONE palette for the\n\
+         whole video (people/props drawn in the same stroke as the scenes — never a\n\
+         different style per scene); NO blue-purple gradients, dark-purple starfields,\n\
+         or neon cyan-purple glows (measured AI-slop tells) unless the client asks;\n\
+         real material first — client screenshots/photos full-bleed, code only annotates\n\
+         and moves the camera around them; ending lands on an ACTION of the hero object\n\
+         (a pocket drop, a book closing, a pull-back to the whole scene), not a centered\n\
+         quote card.\n\n\
          Write a concise numbered execution plan (5-9 steps) to produce this video.\n\
          Each step must be ONE line in exactly this format:\n\
          STEP <n>: <tool_name>(<key args>) -> <expected artifact>\n\n\
