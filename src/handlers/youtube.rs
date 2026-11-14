@@ -16,6 +16,7 @@ use base64::Engine;
 use serde::Deserialize;
 use serde_json::json;
 use std::sync::Arc;
+use uuid::Uuid;
 
 /// Validates redirect URLs to prevent open redirect attacks
 /// Allows:
