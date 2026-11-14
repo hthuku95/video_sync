@@ -32,11 +32,24 @@ use uuid::Uuid;
 use crate::AppState;
 
 const CYCLE_SECS: u64 = 30 * 60;
-/// Wall-clock budget for one education generation + upload attempt.
-/// Measured reality (Nov 14): research crawl + 9 scene renders (2-8 min each
-/// on the droplet) + TTS + dual QA ≈ 30-90 min — the original 45-min budget
-/// killed healthy runs mid-flight (their workflows kept running as orphans).
-const JOB_TIMEOUT_SECS: u64 = 150 * 60;
+/// HEARTBEAT DESIGN (owner directive Nov 14 2026): runs are NEVER killed for
+/// taking long. Liveness is detected via heartbeats:
+///   • the agentic workflow heartbeats every ~20s (pipeline_worker lease) and
+///     its supervisor reclaims crashed runs from checkpoints automatically;
+///   • the JOB heartbeats in its wait loop (updated_at touch) so a dead
+///     watcher is detectable and re-adopted on worker restart.
+/// Bounded timeouts exist ONLY around short finite steps (brief LLM call,
+/// download, upload). The only wall-clock backstop is for a run whose
+/// heartbeat has been stale for hours — which the pipeline supervisor is
+/// supposed to reap first (AGENTIC_MAX_RUN_HOURS).
+const BRIEF_TIMEOUT_SECS: u64 = 120;
+const UPLOAD_TIMEOUT_SECS: u64 = 20 * 60;
+/// Workflow heartbeat considered stale after this (supervisor reclaims first).
+const WF_STALE_SECS: i64 = 30 * 60;
+/// A non-terminal workflow stale this long fails the job (last-resort reap).
+const WF_REAP_SECS: i64 = 6 * 60 * 60;
+/// A 'generating' job with a job-heartbeat stale this long is re-adopted.
+const JOB_ADOPT_STALE_SECS: i64 = 10 * 60;
 /// Poll interval while waiting for the education pipeline to finish.
 const PIPELINE_POLL_SECS: u64 = 30;
 /// Max concurrent generations (droplet CPU protection — owner directive).
@@ -134,6 +147,27 @@ async fn schedule_due_jobs(state: &Arc<AppState>) -> Result<(), String> {
 // ── Executor ────────────────────────────────────────────────────────────────
 
 async fn run_due_jobs(state: &Arc<AppState>) -> Result<(), String> {
+    // ── RE-ADOPTION (checkpoint of the JOB state): 'generating' jobs whose
+    // job-heartbeat is stale belong to a dead watcher — re-enter them with
+    // resume=true (skip generation; wait on the existing workflow + upload).
+    let stale: Vec<(uuid::Uuid, i32, i32, String)> = sqlx::query_as(
+        r#"
+        SELECT id, linkage_id, connected_channel_id, topic FROM education_post_jobs
+        WHERE status = 'generating'
+          AND updated_at < NOW() - make_interval(secs => $1)
+        LIMIT $2
+        "#,
+    )
+    .bind(JOB_ADOPT_STALE_SECS as f64)
+    .bind(MAX_CONCURRENT_GENERATIONS as i64)
+    .fetch_all(&state.db_pool)
+    .await
+    .map_err(|e| e.to_string())?;
+    for (job_id, linkage_id, channel_id, topic) in stale {
+        tracing::warn!(job = %job_id, "🔄 re-adopting education job (watcher heartbeat stale)");
+        execute_job(state.clone(), job_id, linkage_id, channel_id, topic).await;
+    }
+
     for _ in 0..MAX_CONCURRENT_GENERATIONS {
         let job = claim_next_job(state).await?;
         let Some((job_id, linkage_id, channel_id, topic)) = job else {
@@ -176,14 +210,9 @@ async fn execute_job(
     channel_id: i32,
     topic: String,
 ) {
-    let result = tokio::time::timeout(
-        std::time::Duration::from_secs(JOB_TIMEOUT_SECS),
-        execute_job_inner(state.clone(), job_id, channel_id, &topic),
-    )
-    .await;
-    match result {
-        Ok(Ok(())) => {}
-        Ok(Err(e)) => {
+    match execute_job_inner(state.clone(), job_id, channel_id, &topic, false).await {
+        Ok(()) => {}
+        Err(e) => {
             let _ = sqlx::query(
                 "UPDATE education_post_jobs SET status='failed', error_message=$1, updated_at=NOW() WHERE id=$2",
             )
@@ -193,17 +222,6 @@ async fn execute_job(
             .await;
             tracing::error!(job = %job_id, "🎓 education post failed: {e}");
         }
-        Err(_) => {
-            let msg = format!("education post timed out after {JOB_TIMEOUT_SECS}s");
-            let _ = sqlx::query(
-                "UPDATE education_post_jobs SET status='failed', error_message=$1, updated_at=NOW() WHERE id=$2",
-            )
-            .bind(&msg)
-            .bind(job_id)
-            .execute(&state.db_pool)
-            .await;
-            tracing::error!(job = %job_id, "{msg}");
-        }
     }
 }
 
@@ -212,45 +230,84 @@ async fn execute_job_inner(
     job_id: uuid::Uuid,
     channel_id: i32,
     topic: &str,
+    resume: bool,
 ) -> Result<(), String> {
+    // RESUME (checkpoint of the JOB state): a job re-entered after a watcher
+    // death skips straight to the wait+upload phase — the generation workflow
+    // keeps running independently on the durable queue (heartbeat + lease +
+    // supervisor reclaim + checkpoint resume at the pipeline level).
+    let existing_workflow_id: Option<Uuid> = if resume {
+        sqlx::query_scalar("SELECT workflow_id FROM education_post_jobs WHERE id = $1")
+            .bind(job_id)
+            .fetch_one(&state.db_pool)
+            .await
+            .map_err(|e| format!("resume lookup failed: {e}"))?
+    } else {
+        None
+    };
+
     // ── 1. Agent writes the brief: fresh subtopic, no repeats. ──
-    let posted: Vec<String> = sqlx::query_scalar(
-        "SELECT topic FROM education_posted_topics WHERE connected_channel_id = $1 ORDER BY posted_at DESC LIMIT 40",
-    )
-    .bind(channel_id)
-    .fetch_all(&state.db_pool)
-    .await
-    .map_err(|e| e.to_string())?;
+    let posted: Vec<String> = if resume && existing_workflow_id.is_some() {
+        Vec::new() // brief already written in the previous attempt
+    } else {
+        sqlx::query_scalar(
+                "SELECT topic FROM education_posted_topics WHERE connected_channel_id = $1 ORDER BY posted_at DESC LIMIT 40",
+            )
+            .bind(channel_id)
+            .fetch_all(&state.db_pool)
+            .await
+            .map_err(|e| e.to_string())?
+    };
 
     let avoid = if posted.is_empty() {
         "(none yet — first video on this channel)".to_string()
     } else {
         posted.join("; ")
     };
-    let brief_prompt = format!(
-        "You are planning the next video for an educational YouTube channel whose topic is \"{topic}\".\n\
-         Topics already covered (pick something NOT in this list): {avoid}\n\n\
-         Write the video brief: pick ONE fresh subtopic and describe in 2-4 sentences what the \
-         lesson teaches. Facts must be real and well-established. Reply with ONLY the brief text.",
-        topic = topic,
-        avoid = avoid,
-    );
-    let brief = crate::llm_utils::generate_text_fast_with_nim(
-        None,
-        None,
-        None,
-        education_nim().as_ref(),
-        &brief_prompt,
-    )
-    .await
-    .map_err(|e| format!("brief generation failed: {e}"))?
-    .trim()
-    .to_string();
-    let _ = sqlx::query("UPDATE education_post_jobs SET brief=$1, updated_at=NOW() WHERE id=$2")
-        .bind(&brief)
+    let brief = if resume && existing_workflow_id.is_some() {
+        // resumed run: brief was persisted in the previous attempt
+        sqlx::query_scalar::<_, Option<String>>(
+            "SELECT brief FROM education_post_jobs WHERE id = $1",
+        )
         .bind(job_id)
-        .execute(&state.db_pool)
-        .await;
+        .fetch_one(&state.db_pool)
+        .await
+        .map_err(|e| format!("resume brief fetch failed: {e}"))?
+        .flatten()
+        .unwrap_or_else(|| format!("An educational lesson about {topic}."))
+    } else {
+        let brief_prompt = format!(
+            "You are planning the next video for an educational YouTube channel whose topic is \"{topic}\".\n\
+             Topics already covered (pick something NOT in this list): {avoid}\n\n\
+             Write the video brief: pick ONE fresh subtopic and describe in 2-4 sentences what the \
+             lesson teaches. Facts must be real and well-established. Reply with ONLY the brief text.",
+            topic = topic,
+            avoid = avoid,
+        );
+        tokio::time::timeout(
+            std::time::Duration::from_secs(BRIEF_TIMEOUT_SECS),
+            crate::llm_utils::generate_text_fast_with_nim(
+                None,
+                None,
+                None,
+                education_nim().as_ref(),
+                &brief_prompt,
+            ),
+        )
+        .await
+        .map_err(|_| format!("brief generation timed out ({BRIEF_TIMEOUT_SECS}s)"))?
+        .map_err(|e| format!("brief generation failed: {e}"))?
+        .trim()
+        .to_string()
+    };
+    if !resume {
+        let _ =
+            sqlx::query("UPDATE education_post_jobs SET brief=$1, updated_at=NOW() WHERE id=$2")
+                .bind(&brief)
+                .bind(job_id)
+                .execute(&state.db_pool)
+                .await;
+    }
 
     // ── 2. Channel + user (for the delivery row + upload token). ──
     let (uid, channel_yt_id, channel_name): (i32, String, String) = sqlx::query_as(
@@ -262,69 +319,106 @@ async fn execute_job_inner(
     .map_err(|e| format!("channel lookup failed: {e}"))?;
 
     // ── 3. Education generation via the hardened pipeline. ──
-    let title = format!("{topic} — {}", brief.chars().take(60).collect::<String>());
-    let prompt = format!(
-        "Generate an animated educational lesson video explaining the subtopic chosen in this brief. \
-         Topic area: {topic}. Target ~90s — can be longer if the topic requires it. Brief: {brief}"
-    );
-    let delivery_id: Uuid = sqlx::query_scalar(
-        "INSERT INTO deliveries
-         (client_ref, title, gig_type, prompt, style, duration, extra_args, status, user_id)
-         VALUES ($1, $2, 'education', $3, 'educational', $4, $5, 'pending', $6)
-         RETURNING id",
-    )
-    .bind(format!("education_post:{job_id}"))
-    .bind(&title)
-    .bind(&prompt)
-    .bind(90.0_f64)
-    .bind(json!({"education_post": true, "job_id": job_id.to_string(), "topic": topic}))
-    .bind(uid)
-    .fetch_one(&state.db_pool)
-    .await
-    .map_err(|e| format!("delivery insert failed: {e}"))?;
+    // (creation skipped on resume — the workflow already lives on the
+    // durable queue; the pipeline worker drives it with heartbeat + lease +
+    // checkpoint resume)
+    let (delivery_id, workflow_id) = if resume {
+        if let Some(wid) = existing_workflow_id {
+            // job's delivery is recoverable from the linked workflow
+            let did: Uuid =
+                sqlx::query_scalar("SELECT source_record_id FROM app_workflows WHERE id = $1")
+                    .bind(wid)
+                    .fetch_one(&state.db_pool)
+                    .await
+                    .map_err(|e| format!("resume delivery lookup failed: {e}"))?;
+            (did, wid)
+        } else {
+            return Err("resume requested but the job has no workflow".into());
+        }
+    } else {
+        let title = format!("{topic} — {}", brief.chars().take(60).collect::<String>());
+        let prompt = format!(
+            "Generate an animated educational lesson video explaining the subtopic chosen in this brief. \
+             Topic area: {topic}. Target ~90s — can be longer if the topic requires it. Brief: {brief}"
+        );
+        let delivery_id: Uuid = sqlx::query_scalar(
+            "INSERT INTO deliveries
+             (client_ref, title, gig_type, prompt, style, duration, extra_args, status, user_id)
+             VALUES ($1, $2, 'education', $3, 'educational', $4, $5, 'pending', $6)
+             RETURNING id",
+        )
+        .bind(format!("education_post:{job_id}"))
+        .bind(&title)
+        .bind(&prompt)
+        .bind(90.0_f64)
+        .bind(json!({"education_post": true, "job_id": job_id.to_string(), "topic": topic}))
+        .bind(uid)
+        .fetch_one(&state.db_pool)
+        .await
+        .map_err(|e| format!("delivery insert failed: {e}"))?;
 
-    let workflow_id = crate::services::AgenticServicePipeline::start(
-        state.clone(),
-        "education",
-        crate::services::ServiceInput {
-            title: title.clone(),
-            brief: format!(
-                "{prompt}\n\nProduce a clear, curriculum-friendly animated explainer. \
-                 Ground every fact in authoritative sources (see the research step)."
-            ),
-            source_url: None,
-            style: "educational".to_string(),
-            duration_seconds: 90.0,
-            delivery_id,
-            prospect_id: None,
-            session_uuid: None,
-            user_id: Some(uid),
-            source_table: Some("deliveries".to_string()),
-            source_record_id: Some(delivery_id),
-            idempotency_key: Some(format!("education-post:{job_id}")),
-            reference_images: vec![],
-            nim_profile: Some("education".to_string()),
-        },
-    )
-    .await
-    .map_err(|e| format!("pipeline enqueue failed: {e}"))?;
+        let workflow_id = crate::services::AgenticServicePipeline::start(
+            state.clone(),
+            "education",
+            crate::services::ServiceInput {
+                title: title.clone(),
+                brief: format!(
+                    "{prompt}\n\nProduce a clear, curriculum-friendly animated explainer. \
+                     Ground every fact in authoritative sources (see the research step)."
+                ),
+                source_url: None,
+                style: "educational".to_string(),
+                duration_seconds: 90.0,
+                delivery_id,
+                prospect_id: None,
+                session_uuid: None,
+                user_id: Some(uid),
+                source_table: Some("deliveries".to_string()),
+                source_record_id: Some(delivery_id),
+                idempotency_key: Some(format!("education-post:{job_id}")),
+                reference_images: vec![],
+                nim_profile: Some("education".to_string()),
+            },
+        )
+        .await
+        .map_err(|e| format!("pipeline enqueue failed: {e}"))?;
 
-    let _ =
-        sqlx::query("UPDATE education_post_jobs SET workflow_id=$1, updated_at=NOW() WHERE id=$2")
-            .bind(workflow_id)
+        let _ = sqlx::query(
+            "UPDATE education_post_jobs SET workflow_id=$1, updated_at=NOW() WHERE id=$2",
+        )
+        .bind(workflow_id)
+        .bind(job_id)
+        .execute(&state.db_pool)
+        .await;
+        (delivery_id, workflow_id)
+    };
+
+    // ── 4. Wait for the pipeline to finish — HEARTBEAT LIVENESS, no wall clock. ──
+    // The workflow heartbeats (lease) and the pipeline supervisor reclaims
+    // crashed runs from checkpoints; this loop only reacts to terminal states
+    // and reaps a run whose heartbeat has been dead for hours (last resort —
+    // the supervisor's AGENTIC_MAX_RUN_HOURS should reap it first).
+    let (status, output_url): (String, Option<String>) = loop {
+        tokio::time::sleep(std::time::Duration::from_secs(PIPELINE_POLL_SECS)).await;
+
+        // JOB heartbeat: proof this watcher is alive (drives re-adoption).
+        let _ = sqlx::query("UPDATE education_post_jobs SET updated_at=NOW() WHERE id=$1")
             .bind(job_id)
             .execute(&state.db_pool)
             .await;
 
-    // ── 4. Wait for the pipeline to finish. ──
-    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(JOB_TIMEOUT_SECS);
-    let (status, output_url): (String, Option<String>) = loop {
-        tokio::time::sleep(std::time::Duration::from_secs(PIPELINE_POLL_SECS)).await;
-        if tokio::time::Instant::now() > deadline {
-            return Err("pipeline did not finish in time".into());
-        }
-        let row = sqlx::query_as::<_, (Option<String>, Option<String>)>(
-            "SELECT d.status, d.output_r2_url FROM deliveries d WHERE d.id = $1",
+        let row = sqlx::query_as::<
+            _,
+            (
+                Option<String>,
+                Option<String>,
+                Option<chrono::DateTime<chrono::Utc>>,
+            ),
+        >(
+            "SELECT d.status, d.output_r2_url, w.updated_at
+             FROM deliveries d
+             LEFT JOIN app_workflows w ON w.id = d.workflow_id
+             WHERE d.id = $1",
         )
         .bind(delivery_id)
         .fetch_one(&state.db_pool)
@@ -348,6 +442,23 @@ async fn execute_job_inner(
                 .unwrap_or_else(|| "unknown".into())
             ));
         }
+
+        // Liveness: reap a non-terminal run whose heartbeat is hours dead.
+        if let Some(beat) = row.2 {
+            let stale_secs = (chrono::Utc::now() - beat).num_seconds();
+            if stale_secs > WF_REAP_SECS {
+                let _ = sqlx::query(
+                    "UPDATE app_workflows SET status='cancelled', current_step='heartbeat_dead_reaped', updated_at=NOW() WHERE id=$1 AND status IN ('queued','running')",
+                )
+                .bind(workflow_id)
+                .execute(&state.db_pool)
+                .await;
+                return Err(format!(
+                    "workflow heartbeat dead for {:.1}h — reaped (the pipeline supervisor should have reclaimed it first)",
+                    stale_secs as f64 / 3600.0
+                ));
+            }
+        }
     };
     let output_url = output_url.ok_or("generation completed but no output URL")?;
     let _ = sqlx::query(
@@ -359,9 +470,13 @@ async fn execute_job_inner(
     .await;
 
     // ── 5. Download + upload to the connected channel. ──
-    let video_path = crate::services::av_sync_qa::resolve_video_for_craft(&output_url)
-        .await
-        .map_err(|e| format!("output download failed: {e}"))?;
+    let video_path = tokio::time::timeout(
+        std::time::Duration::from_secs(10 * 60),
+        crate::services::av_sync_qa::resolve_video_for_craft(&output_url),
+    )
+    .await
+    .map_err(|_| "output download timed out (10 min)".to_string())?
+    .map_err(|e| format!("output download failed: {e}"))?;
 
     let access_token = fresh_channel_token(&state, channel_id).await?;
     let yt_title = format!("{} | {}", topic, title);
@@ -374,8 +489,9 @@ async fn execute_job_inner(
         .youtube_client
         .as_ref()
         .ok_or("YouTube client not configured")?;
-    let upload = yt
-        .upload_video(
+    let upload = tokio::time::timeout(
+        std::time::Duration::from_secs(UPLOAD_TIMEOUT_SECS),
+        yt.upload_video(
             &access_token,
             video_path.to_str().unwrap_or(""),
             &yt_title,
@@ -383,9 +499,11 @@ async fn execute_job_inner(
             "public",
             Some("27"), // Education category
             Some(vec![topic.to_string(), "education".to_string()]),
-        )
-        .await
-        .map_err(|e| format!("YouTube upload failed: {e}"))?;
+        ),
+    )
+    .await
+    .map_err(|_| "YouTube upload timed out".to_string())?
+    .map_err(|e| format!("YouTube upload failed: {e}"))?;
     let yt_video_id = upload.id.clone();
 
     let _ = sqlx::query(
