@@ -111,6 +111,10 @@ pub fn youtube_routes() -> Router {
     let protected_routes = Router::new()
         // OAuth connection (requires auth to know which user)
         .route("/youtube/connect", get(initiate_youtube_connection))
+        // JSON API alias for the Content Machine UI (its channels.service calls
+        // /api/youtube/connect; the page-level route above serves the same
+        // handler). Fixed the connect 404 (owner report Nov 14 2026).
+        .route("/api/youtube/connect", get(initiate_youtube_connection))
         // Channel management (protected)
         .route("/api/youtube/channels", get(list_connected_channels))
         .route(
