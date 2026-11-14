@@ -868,35 +868,28 @@ async fn main() {
     // ── EDUCATION_WORKER: dedicated education-posting worker (owner directive
     // Nov 13 2026). Runs on its own Render worker service (`vs-edu-worker`):
     // schedules + generates educational videos and posts them to the connected
-    // YouTube channels of whitelisted users. Skips the HTTP server entirely.
+    // YouTube channels of whitelisted users.
+    // FIX (Nov 14 2026 — the exit-101 + eternal-timeout incident): the first
+    // version of this branch BLOCKED here (loop{sleep 3600}) BEFORE the
+    // agentic pipeline infrastructure below could start — the worker spawned
+    // zero claimers, so its enqueued education workflows were never executed
+    // and every job timed out at 45 min. Correct pattern (same as
+    // WORKER_MODE): spawn the education loop as a background task and FALL
+    // THROUGH to the normal startup (pipeline infrastructure included). The
+    // HTTP server runs too — harmless on a worker service.
     if std::env::var("EDUCATION_WORKER").as_deref() == Ok("true") {
         tracing::info!(
-            "🎓 EDUCATION_WORKER enabled — running education-posting worker only, no HTTP server"
+            "🎓 EDUCATION_WORKER enabled — education-posting worker starting alongside pipeline infrastructure"
         );
-        let worker_state = shared_state.clone();
-        std::thread::spawn(move || loop {
-            let state = worker_state.clone();
-            let handle = std::thread::spawn(move || {
-                let rt = tokio::runtime::Runtime::new()
-                    .expect("Failed to create tokio runtime for education worker");
-                rt.block_on(async move {
-                    jobs::education_post_worker::run_education_worker_loop(state).await
-                });
-            });
-            match handle.join() {
-                Ok(_) => tracing::warn!("⚠️ Education worker exited. Restarting in 5s..."),
-                Err(e) => {
-                    tracing::error!("💥 Education worker panicked: {:?}. Restarting in 5s...", e)
-                }
+        let edu_state = shared_state.clone();
+        tokio::spawn(async move {
+            loop {
+                jobs::education_post_worker::run_education_worker_loop(edu_state.clone()).await;
+                tracing::warn!("⚠️ Education worker exited. Restarting in 5s...");
+                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
             }
-            std::time::Duration::from_secs(5);
-            std::thread::sleep(std::time::Duration::from_secs(5));
         });
-
-        // Block forever: this process IS the education worker.
-        loop {
-            tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
-        }
+        // FALL THROUGH — do NOT block; pipeline infra + server start below.
     }
 
     // ── WORKER_MODE: skip HTTP server, run only clipping worker ──────────
