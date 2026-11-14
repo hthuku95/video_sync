@@ -6382,14 +6382,7 @@ pub async fn dashboard_page() -> Html<String> {
                     <p>View YouTube channel performance and video analytics</p>
                 </a>
                 <!-- YouTube Clipping Card (only for admins/whitelisted users) -->
-                <a href="/clipping/manage" class="action-card" id="clipping-action-card" style="display: none;">
-                    <h3><span class="action-icon"><svg viewBox="0 0 24 24"><circle cx="6" cy="6" r="2"></circle><circle cx="6" cy="18" r="2"></circle><path d="M8 7.5 19 4"></path><path d="M8 16.5 19 20"></path><path d="M14 12h7"></path></svg></span>YouTube Clipping</h3>
-                    <p>Auto-generate viral clips from popular channels and post to your channel</p>
-                </a>
-                <a href="/manual-clipping" class="action-card" id="manual-clipping-action-card" style="display: none;">
-                    <h3><span class="action-icon"><svg viewBox="0 0 24 24"><circle cx="6" cy="6" r="2"></circle><circle cx="6" cy="18" r="2"></circle><path d="M8 7.5 19 4"></path><path d="M8 16.5 19 20"></path><path d="M14 12h7"></path></svg></span>Manual Clipping</h3>
-                    <p>Paste any YouTube or Twitch URL to extract viral clips with download links — no destination channel needed</p>
-                </a>
+                <!-- Clipping cards removed Nov 14 2026 (audit) — legacy system retired; education posting lives on the dedicated worker -->
                 <a href="/campaigns" class="action-card">
                     <h3><span class="action-icon"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="6" height="6" rx="1"></rect><rect x="15" y="3" width="6" height="6" rx="1"></rect><rect x="3" y="15" width="6" height="6" rx="1"></rect><rect x="15" y="15" width="6" height="6" rx="1"></rect></svg></span>Campaigns</h3>
                     <p>Set up automated daily content generation and cross-platform posting campaigns</p>
@@ -6464,11 +6457,9 @@ pub async fn dashboard_page() -> Html<String> {
 
         // Show/hide YouTube clipping card based on permissions
         // Check access via API to include whitelisted users
-        const clippingCard = document.getElementById('clipping-action-card');
         const connectYoutubeCard = document.getElementById('connect-youtube-action-card');
         const analyticsCard = document.getElementById('analytics-action-card');
-        const manualClippingCard = document.getElementById('manual-clipping-action-card');
-        if (clippingCard || connectYoutubeCard || analyticsCard || manualClippingCard) {
+        if (connectYoutubeCard || analyticsCard) {
             const authToken = localStorage.getItem('authToken') || localStorage.getItem('admin_token') || localStorage.getItem('auth_token');
             if (authToken) {
                 fetch('/api/clipping/access-check', {
@@ -6476,10 +6467,8 @@ pub async fn dashboard_page() -> Html<String> {
                 })
                 .then(response => {
                     if (response.ok) {
-                        if (clippingCard) clippingCard.style.display = 'block';
                         if (connectYoutubeCard) connectYoutubeCard.style.display = 'block';
                         if (analyticsCard) analyticsCard.style.display = 'block';
-                        if (manualClippingCard) manualClippingCard.style.display = 'block';
                     }
                 })
                 .catch(err => console.debug('Clipping access check failed:', err));

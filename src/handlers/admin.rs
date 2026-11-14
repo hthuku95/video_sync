@@ -462,7 +462,6 @@ pub async fn admin_dashboard() -> Html<String> {
         <ul>
             <li><a href="/admin/dashboard" class="active">📊 Dashboard</a></li>
             <li><a href="/admin/users">👥 Users</a></li>
-            <li><a href="/admin/clipping-activity">🎬 Clipping Activity</a></li>
             <li><a href="/admin/performance">📈 Performance</a></li>
             <li><a href="/admin/test-runs">🧪 Portfolio Tests</a></li>
             <li><a href="/admin/portfolio-samples">🧠 Portfolio Samples</a></li>
@@ -476,7 +475,6 @@ pub async fn admin_dashboard() -> Html<String> {
             <li><a href="/admin/how-it-works">📘 How We Work</a></li>
             <li><a href="#" onclick="showWhitelist()">🛡️ Whitelist</a></li>
             <li><a href="#" onclick="showYoutube()">🎥 YouTube Features</a></li>
-            <li><a href="#" onclick="showAutoClipping()">⏸️ Auto Clipping</a></li>
             <li><a href="#" onclick="showPricing()">💲 Model Pricing</a></li>
             <li><a href="/api/docs">📚 API Docs</a></li>
             <li><a href="/api/status">⚙️ System Status</a></li>
@@ -598,24 +596,7 @@ pub async fn admin_dashboard() -> Html<String> {
             </div>
         </div>
 
-        <div id="autoClippingSection" class="whitelist-section" style="display: none;">
-            <h2>⏸️ Auto Clipping Control</h2>
-            <p style="color: #6c757d; margin-bottom: 1.5rem;">Pause or resume automatic background clipping. Manual clipping jobs are unaffected.</p>
-
-            <div style="display: flex; align-items: center; gap: 1rem; margin-bottom: 1rem;">
-                <label class="toggle-switch">
-                    <input type="checkbox" id="autoClippingToggle">
-                    <span class="slider"></span>
-                </label>
-                <span id="autoClippingStatus" style="font-weight: 600;">Loading...</span>
-            </div>
-
-            <div style="background: #fff3cd; border: 1px solid #ffeaa7; padding: 1rem; border-radius: 8px; margin-top: 1rem;">
-                <strong>When Enabled:</strong> The background worker will automatically discover, clip, and publish content from monitored channels.<br>
-                <strong>When Disabled:</strong> Only manually created clipping jobs will be processed. Existing auto-clipping jobs are preserved and will resume when re-enabled.<br><br>
-                <em style="color: #856404;">💡 Tip: Disable during short-term campaigns to free worker capacity, then re-enable after.</em>
-            </div>
-        </div>
+<!-- Auto Clipping section removed Nov 14 2026 (legacy system retired) -->
 
         <div id="pricingSection" class="whitelist-section" style="display: none;">
             <h2>💰 Model Pricing Management</h2>
@@ -994,8 +975,9 @@ pub async fn admin_dashboard() -> Html<String> {
             }
         });
 
-        // Auto Clipping Toggle
-        document.getElementById('autoClippingToggle').addEventListener('change', async (e) => {
+        // Auto Clipping Toggle — section removed Nov 14 2026 (legacy system retired)
+        const autoClippingToggle = document.getElementById('autoClippingToggle');
+        if (autoClippingToggle) autoClippingToggle.addEventListener('change', async (e) => {
             const enabled = e.target.checked;
 
             if (!confirm(`Are you sure you want to ${enabled ? 'enable' : 'disable'} automatic clipping? Existing jobs will ${enabled ? 'resume processing' : 'pause and resume later'}.`)) {
@@ -1065,14 +1047,7 @@ pub async fn admin_dashboard() -> Html<String> {
             }
         }
 
-        function showAutoClipping() {
-            document.getElementById('autoClippingSection').style.display = 'block';
-            document.getElementById('whitelistSection').style.display = 'none';
-            document.getElementById('youtubeSection').style.display = 'none';
-            document.getElementById('pricingSection').style.display = 'none';
-            document.querySelector('.recent-section').style.display = 'none';
-            loadAutoClippingStatus();
-        }
+        function showAutoClipping() { /* removed Nov 14 2026 */ }
 
         async function loadAutoClippingStatus() {
             try {
@@ -1084,6 +1059,7 @@ pub async fn admin_dashboard() -> Html<String> {
                 if (data.success) {
                     const toggle = document.getElementById('autoClippingToggle');
                     const status = document.getElementById('autoClippingStatus');
+                    if (!toggle || !status) return;
 
                     toggle.checked = data.enabled;
                     status.textContent = data.enabled ? '✅ Enabled (Auto worker active)' : '⏸️ Disabled (Manual only)';
@@ -1519,7 +1495,6 @@ pub async fn admin_users_list() -> Html<String> {
         <ul>
             <li><a href="/admin/dashboard">📊 Dashboard</a></li>
             <li><a href="/admin/users" class="active">👥 Users</a></li>
-            <li><a href="/admin/clipping-activity">🎬 Clipping Activity</a></li>
             <li><a href="/admin/performance">📈 Performance</a></li>
             <li><a href="/admin/test-runs">🧪 Portfolio Tests</a></li>
             <li><a href="/api/docs">📚 API Docs</a></li>
@@ -1840,7 +1815,6 @@ pub async fn admin_user_detail(Path(id): Path<i32>) -> Html<String> {
         <ul>
             <li><a href="/admin/dashboard">📊 Dashboard</a></li>
             <li><a href="/admin/users" class="active">👥 Users</a></li>
-            <li><a href="/admin/clipping-activity">🎬 Clipping Activity</a></li>
             <li><a href="/admin/performance">📈 Performance</a></li>
             <li><a href="/admin/test-runs">🧪 Portfolio Tests</a></li>
             <li><a href="/api/docs">📚 API Docs</a></li>
@@ -4369,7 +4343,7 @@ pub async fn admin_clipping_activity_page() -> Html<String> {
             <ul>
                 <li><a href="/admin/dashboard">📊 Dashboard</a></li>
                 <li><a href="/admin/users">👥 Users</a></li>
-                <li><a href="/admin/clipping-activity" class="active">🎬 Clipping Activity</a></li>
+                
                 <li><a href="/admin/performance">📈 Performance</a></li>
                 <li><a href="/admin/test-runs">🧪 Portfolio Tests</a></li>
                 <li><a href="/api/docs">📚 API Docs</a></li>
@@ -12782,7 +12756,7 @@ tr:hover{background:#f8f9fa}
   <ul>
     <li><a href="/admin/dashboard">📊 Dashboard</a></li>
     <li><a href="/admin/users">👥 Users</a></li>
-    <li><a href="/admin/clipping-activity">🎬 Clipping Activity</a></li>
+    
     <li><a href="/admin/deliveries">📦 Deliveries</a></li>
     <li><a href="/admin/campaigns" class="active">📋 Campaigns</a></li>
     <li><a href="/admin/zernio">📱 Social</a></li>
@@ -13029,7 +13003,7 @@ th{background:#f8f9fa;font-weight:600}
   <ul>
     <li><a href="/admin/dashboard">📊 Dashboard</a></li>
     <li><a href="/admin/users">👥 Users</a></li>
-    <li><a href="/admin/clipping-activity">🎬 Clipping Activity</a></li>
+    
     <li><a href="/admin/deliveries">📦 Deliveries</a></li>
     <li><a href="/admin/campaigns">📋 Campaigns</a></li>
     <li><a href="/admin/zernio" class="active">📱 Social</a></li>
