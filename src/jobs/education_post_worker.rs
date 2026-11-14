@@ -33,7 +33,10 @@ use crate::AppState;
 
 const CYCLE_SECS: u64 = 30 * 60;
 /// Wall-clock budget for one education generation + upload attempt.
-const JOB_TIMEOUT_SECS: u64 = 45 * 60;
+/// Measured reality (Nov 14): research crawl + 9 scene renders (2-8 min each
+/// on the droplet) + TTS + dual QA ≈ 30-90 min — the original 45-min budget
+/// killed healthy runs mid-flight (their workflows kept running as orphans).
+const JOB_TIMEOUT_SECS: u64 = 150 * 60;
 /// Poll interval while waiting for the education pipeline to finish.
 const PIPELINE_POLL_SECS: u64 = 30;
 /// Max concurrent generations (droplet CPU protection — owner directive).
