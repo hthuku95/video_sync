@@ -6870,15 +6870,13 @@ pub async fn api_trigger_manual_clipping_test(
         )
     });
 
-    // Service switch: legacy manual-clipping tests are Type-3 (OFF).
-    if !crate::services::service_flags::service_enabled(&state.db_pool, "youtube_education_posting")
-        .await
-    {
+    // Service switch: admin test renders (owner: the testing infrastructure is a
+    // core part of the system; the retired youtube_education_posting flag was
+    // deleted Nov 14 2026 — this endpoint belongs to admin_tests).
+    if !crate::services::service_flags::service_enabled(&state.db_pool, "admin_tests").await {
         return Err((
             StatusCode::SERVICE_UNAVAILABLE,
-            Json(
-                json!({ "error": "Legacy manual clipping tests are currently disabled (service_flags)." }),
-            ),
+            Json(json!({ "error": "Admin test renders are currently disabled (service_flags)." })),
         ));
     }
 

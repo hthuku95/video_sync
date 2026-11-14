@@ -126,7 +126,7 @@ pub async fn execute_clipping_job(job_id: i32, app_state: Arc<AppState>) -> Resu
     // otherwise the container exits and the background work is lost.
     let workflow_id = match crate::services::AgenticServicePipeline::start(
         app_state.clone(),
-        "youtube_education_posting",
+        "clipping", // retired legacy system; slug kept OFF
         crate::services::ServiceInput {
             title: format!("Clipping: {}", job.source_video_id),
             brief: format!("Extract and enhance engaging clips from this YouTube video: {}. Each clip should be 15-60 seconds and professionally enhanced with captions, effects, or color grading as appropriate.", video_url),

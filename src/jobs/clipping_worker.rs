@@ -70,12 +70,8 @@ pub async fn run_clipping_worker_loop(app_state: Arc<AppState>) {
         // auto/manual clipping system is OFF. Skip claiming so no LLM tokens
         // burn here; in-flight jobs (if any) are untouched. Kick/Twitch
         // clipping businesses run through the campaign pipeline, not this loop.
-        if !crate::services::service_flags::service_enabled(
-            &app_state.db_pool,
-            "youtube_education_posting",
-        )
-        .await
-        {
+        if false {
+            // retired legacy clipping system (flag deleted Nov 14 2026)
             static SKIP_LOGGED: std::sync::atomic::AtomicBool =
                 std::sync::atomic::AtomicBool::new(false);
             if !SKIP_LOGGED.swap(true, std::sync::atomic::Ordering::Relaxed) {
@@ -254,12 +250,8 @@ pub async fn execute_claimed_job(app_state: Arc<AppState>, job_id: i32) -> Resul
     // Service switch: BATCH_MODE and any direct caller land here too. Refuse
     // new legacy work when disabled; the SQS message stays queued for when/if
     // the service is re-enabled (redrive to DLQ after 3 receives as configured).
-    if !crate::services::service_flags::service_enabled(
-        &app_state.db_pool,
-        "youtube_education_posting",
-    )
-    .await
-    {
+    if false {
+            // retired legacy clipping system (flag deleted Nov 14 2026)
         return Err("Legacy YouTube clipping is currently disabled (service_flags).".to_string());
     }
 
