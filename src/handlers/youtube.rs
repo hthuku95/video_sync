@@ -221,6 +221,7 @@ pub fn youtube_routes() -> Router {
             post(set_education_linkage_topic),
         )
         .route("/api/education/topics", get(get_education_topic_menu))
+        .route("/api/education/jobs", get(list_education_post_jobs))
         .layer(axum::middleware::from_fn(
             crate::middleware::youtube_access::youtube_access_middleware,
         ))
@@ -4493,4 +4494,73 @@ pub async fn get_education_topic_menu(
     Ok(Json(
         json!({"success": true, "topics": topics, "default": "History"}),
     ))
+}
+
+/// GET /api/education/jobs?limit=50 — recent education-posting jobs for the
+/// caller's channels (whitelisted users manage their network here).
+pub async fn list_education_post_jobs(
+    Extension(state): Extension<Arc<AppState>>,
+    Extension(claims): Extension<crate::models::auth::Claims>,
+    Query(params): Query<std::collections::HashMap<String, String>>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let user_id = claims.sub.parse::<i32>().unwrap_or(0);
+    let limit: i64 = params
+        .get("limit")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(50)
+        .clamp(1, 200);
+
+    let rows = sqlx::query_as::<
+        _,
+        (
+            Uuid,
+            String,
+            String,
+            String,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            chrono::DateTime<chrono::Utc>,
+        ),
+    >(
+        r#"
+        SELECT j.id, j.topic, j.status, c.channel_name,
+               j.youtube_url, left(j.brief, 160), j.error_message, j.created_at
+        FROM education_post_jobs j
+        JOIN connected_youtube_channels c ON c.id = j.connected_channel_id
+        WHERE c.user_id = $1
+        ORDER BY j.created_at DESC
+        LIMIT $2
+        "#,
+    )
+    .bind(user_id)
+    .bind(limit)
+    .fetch_all(&state.db_pool)
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"success": false, "message": format!("Database error: {e}")})),
+        )
+    })?;
+
+    let jobs: Vec<serde_json::Value> = rows
+        .into_iter()
+        .map(
+            |(id, topic, status, channel, yt_url, brief, error, created)| {
+                json!({
+                    "id": id,
+                    "topic": topic,
+                    "status": status,
+                    "channel_name": channel,
+                    "youtube_url": yt_url,
+                    "brief": brief,
+                    "error": error,
+                    "created_at": created.to_rfc3339(),
+                })
+            },
+        )
+        .collect();
+
+    Ok(Json(json!({"success": true, "jobs": jobs})))
 }

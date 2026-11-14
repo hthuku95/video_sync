@@ -112,7 +112,8 @@ async fn enqueue_clipping_job(
     // pipeline worker only claims agentic_* workflows, so nothing downstream
     // can pick these up either way. Kick/Twitch clipping businesses run
     // through the campaign pipeline, not this monitor.
-    if !crate::services::service_flags::false {
+    if false {
+        // retired legacy clipping system (flag deleted Nov 14 2026)
         tracing::debug!(
             "⏸️ Legacy auto-clip skipped for linkage {} video {} (service disabled)",
             linkage.id,

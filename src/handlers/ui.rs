@@ -102,17 +102,17 @@ pub fn ui_routes() -> Router {
         .route("/signup", get(signup_page))
         .route("/dashboard", get(dashboard_page))
         .route("/analytics", get(analytics_dashboard_page))
-        .route("/clipping/manage", get(clipping_management_page))
         .route("/help", get(help_guide_page))
         .route("/privacy", get(privacy_policy_page))
         .route("/terms", get(terms_of_service_page))
+        // Routes REMOVED Nov 14 2026 (audit): /clipping/manage (legacy clipping UI —
+        // APIs unmounted), /video-tools (no product purpose), /signup/clipper (pointed
+        // at removed manual clipping). Handlers remain compiled but unrouted.
         .route("/chat", get(chat_interface))
         .route("/chat/:session_id", get(chat_interface_with_session))
         .route("/app", get(chat_interface)) // Alternative route
-        .route("/video-tools", get(video_tools_page))
         // Manual clipping page REMOVED (owner directive Nov 13 2026 — clipping removed
         // from the YouTube-API system; Zernio campaigns own clipping now)
-        .route("/signup/clipper", get(clipper_signup_page))
         // Campaign pages + account/social — public HTML with optional auth middleware
         // Injects Claims if JWT cookie/header/query found; otherwise passes through without.
         // Handlers use Option<Extension<Claims>> to show login prompt when unauthenticated.
