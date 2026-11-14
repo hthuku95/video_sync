@@ -198,7 +198,7 @@ pub async fn execute_manual_clipping_job(
 
     match AgenticServicePipeline::start(
         app_state.clone(),
-        "legacy_youtube_clipping",
+        "youtube_education_posting",
         ServiceInput {
             title: format!("Manual clipping: {}", video_url),
             brief: format!("Extract and enhance engaging clips from this video: {}. Each clip should be 15-60 seconds and professionally enhanced with captions, effects, or color grading as appropriate. Output at least 3 clips.", video_url),

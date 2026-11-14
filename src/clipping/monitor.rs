@@ -112,7 +112,7 @@ async fn enqueue_clipping_job(
     // pipeline worker only claims agentic_* workflows, so nothing downstream
     // can pick these up either way. Kick/Twitch clipping businesses run
     // through the campaign pipeline, not this monitor.
-    if !crate::services::service_flags::service_enabled(pool, "legacy_youtube_clipping").await {
+    if !crate::services::service_flags::service_enabled(pool, "youtube_education_posting").await {
         tracing::debug!(
             "⏸️ Legacy auto-clip skipped for linkage {} video {} (service disabled)",
             linkage.id,
@@ -195,7 +195,7 @@ impl ChannelMonitor {
         // every discovered video — every 5 minutes, in all 3 API tasks.
         if !crate::services::service_flags::service_enabled(
             &self.db_pool,
-            "legacy_youtube_clipping",
+            "youtube_education_posting",
         )
         .await
         {

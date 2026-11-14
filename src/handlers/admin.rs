@@ -6871,7 +6871,7 @@ pub async fn api_trigger_manual_clipping_test(
     });
 
     // Service switch: legacy manual-clipping tests are Type-3 (OFF).
-    if !crate::services::service_flags::service_enabled(&state.db_pool, "legacy_youtube_clipping")
+    if !crate::services::service_flags::service_enabled(&state.db_pool, "youtube_education_posting")
         .await
     {
         return Err((

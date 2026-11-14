@@ -46,7 +46,7 @@ pub const SYSTEM_GROUPS: &[&str] = &[
     "prospecting",
     "outreach",
     "sample_packs",
-    "legacy_youtube_clipping",
+    "youtube_education_posting",
     "chat_agents",
     "admin_tests",
     "campaigns",

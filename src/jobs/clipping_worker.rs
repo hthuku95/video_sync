@@ -72,7 +72,7 @@ pub async fn run_clipping_worker_loop(app_state: Arc<AppState>) {
         // clipping businesses run through the campaign pipeline, not this loop.
         if !crate::services::service_flags::service_enabled(
             &app_state.db_pool,
-            "legacy_youtube_clipping",
+            "youtube_education_posting",
         )
         .await
         {
@@ -256,7 +256,7 @@ pub async fn execute_claimed_job(app_state: Arc<AppState>, job_id: i32) -> Resul
     // the service is re-enabled (redrive to DLQ after 3 receives as configured).
     if !crate::services::service_flags::service_enabled(
         &app_state.db_pool,
-        "legacy_youtube_clipping",
+        "youtube_education_posting",
     )
     .await
     {

@@ -190,7 +190,7 @@ async fn service_tool_deny(tool_name: &str, ctx: &ToolExecutionContext) -> Optio
     let service =
         crate::services::agentic_service_pipeline::ServiceType::from_normalized(normalized);
     let is_clipping = service == crate::services::agentic_service_pipeline::ServiceType::Clipping
-        || s == "legacy_youtube_clipping"
+        || s == "youtube_education_posting"
         || stype.as_deref() == Some("clipping");
 
     // Landing/education must render their own timeline. `auto_generate_video`

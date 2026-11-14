@@ -81,7 +81,7 @@ async fn create_job(
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
     // Service switch (owner directive Sep 2026): legacy manual clipping is OFF.
     // Reads (list/get/delete) keep working for history; only new renders stop.
-    if !crate::services::service_flags::service_enabled(&state.db_pool, "legacy_youtube_clipping")
+    if !crate::services::service_flags::service_enabled(&state.db_pool, "youtube_education_posting")
         .await
     {
         return Err((
