@@ -74,17 +74,7 @@ pub struct DfyServiceDef {
 }
 
 pub fn dfy_services() -> &'static [DfyServiceDef] {
-    &[
-        DfyServiceDef {
-            slug: "clipping",
-            name: "Short-Form Clip Distribution",
-            price_mo: 297,
-            brief: "Turn a 30-minute tech podcast episode into 5 high-retention short-form clips with captions, branded lower thirds, and viral hooks for TikTok and YouTube Shorts.",
-            style: "high-retention clip pack, captions, branded lower thirds, viral hooks",
-            duration_seconds: 15.0,
-            source_url: "",
-        },
-        DfyServiceDef {
+    &[        DfyServiceDef {
             slug: "youtube_clipping",
             name: "YouTube Clipping",
             price_mo: 297,
@@ -96,7 +86,7 @@ pub fn dfy_services() -> &'static [DfyServiceDef] {
         DfyServiceDef {
             slug: "twitch_clipping",
             name: "Twitch Clipping",
-            price_mo: 297,
+            price_mo: 199,
             brief: "Turn a 2-hour Twitch stream VOD into 10 viral highlights with captions, branded lower thirds, and stream-highlight energy, optimized for TikTok/Shorts vertical format.",
             style: "high-retention clip pack, vertical 9:16, karaoke captions, zoom on reactions",
             duration_seconds: 15.0,
@@ -105,7 +95,7 @@ pub fn dfy_services() -> &'static [DfyServiceDef] {
         DfyServiceDef {
             slug: "kick_auto_clipper",
             name: "Kick Auto-Clipper",
-            price_mo: 297,
+            price_mo: 199,
             brief: "Automatically clip a 2-hour Kick streaming VOD into 10 viral highlights with Kick-compliant branding (logo, captions, zooms, outro card), optimized for TikTok/Shorts vertical format.",
             style: "Kick clip style, vertical 9:16, karaoke captions, logo overlay, zoom on reactions",
             duration_seconds: 45.0,
