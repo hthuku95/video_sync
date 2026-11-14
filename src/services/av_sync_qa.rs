@@ -174,8 +174,31 @@ fn truncate(s: &str, max: usize) -> String {
     }
 }
 
+/// Janitor: stale QA download temp files (older than 2h) are removed — the
+/// normal path cleans up in-run, but crashed processes can leave strays.
+fn sweep_stale_avsync_temp_files() {
+    if let Ok(entries) = std::fs::read_dir(std::env::temp_dir()) {
+        for e in entries.flatten() {
+            let name = e.file_name().to_string_lossy().into_owned();
+            if name.starts_with("avsync_video_") {
+                if let Ok(md) = e.metadata() {
+                    if md
+                        .modified()
+                        .ok()
+                        .map(|m| m.elapsed().unwrap_or_default().as_secs() > 7200)
+                        .unwrap_or(false)
+                    {
+                        let _ = std::fs::remove_file(e.path());
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// Entry point. `video` is a local path or an http(s) URL (downloaded to temp).
 pub async fn verify_av_sync(state: &Arc<AppState>, video: &str) -> AvSyncReport {
+    sweep_stale_avsync_temp_files();
     match verify_av_sync_inner(state, video).await {
         Ok(report) => report,
         Err(e) => AvSyncReport {

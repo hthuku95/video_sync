@@ -273,7 +273,6 @@ async fn execute_job_inner(
         .fetch_one(&state.db_pool)
         .await
         .map_err(|e| format!("resume brief fetch failed: {e}"))?
-        .flatten()
         .unwrap_or_else(|| format!("An educational lesson about {topic}."))
     } else {
         let brief_prompt = format!(
@@ -322,16 +321,19 @@ async fn execute_job_inner(
     // (creation skipped on resume — the workflow already lives on the
     // durable queue; the pipeline worker drives it with heartbeat + lease +
     // checkpoint resume)
-    let (delivery_id, workflow_id) = if resume {
+    let (delivery_id, workflow_id, title) = if resume {
         if let Some(wid) = existing_workflow_id {
-            // job's delivery is recoverable from the linked workflow
-            let did: Uuid =
-                sqlx::query_scalar("SELECT source_record_id FROM app_workflows WHERE id = $1")
-                    .bind(wid)
-                    .fetch_one(&state.db_pool)
-                    .await
-                    .map_err(|e| format!("resume delivery lookup failed: {e}"))?;
-            (did, wid)
+            // job's delivery (and its persisted title) is recoverable from the
+            // linked workflow
+            let (did, title): (Uuid, String) = sqlx::query_as(
+                "SELECT w.source_record_id, d.title FROM app_workflows w \
+                 JOIN deliveries d ON d.id = w.source_record_id WHERE w.id = $1",
+            )
+            .bind(wid)
+            .fetch_one(&state.db_pool)
+            .await
+            .map_err(|e| format!("resume delivery lookup failed: {e}"))?;
+            (did, wid, title)
         } else {
             return Err("resume requested but the job has no workflow".into());
         }
@@ -390,7 +392,7 @@ async fn execute_job_inner(
         .bind(job_id)
         .execute(&state.db_pool)
         .await;
-        (delivery_id, workflow_id)
+        (delivery_id, workflow_id, title)
     };
 
     // ── 4. Wait for the pipeline to finish — HEARTBEAT LIVENESS, no wall clock. ──
@@ -505,6 +507,11 @@ async fn execute_job_inner(
     .map_err(|_| "YouTube upload timed out".to_string())?
     .map_err(|e| format!("YouTube upload failed: {e}"))?;
     let yt_video_id = upload.id.clone();
+
+    // CLEANUP (owner directive Nov 15 2026): delete the downloaded video
+    // bytes immediately — success or failure — so completed uploads never
+    // bloat the worker's disk.
+    let _ = tokio::fs::remove_file(&video_path).await;
 
     let _ = sqlx::query(
         "UPDATE education_post_jobs SET status='completed', youtube_video_id=$1, \
