@@ -3588,6 +3588,10 @@ pub struct EducationScheduleRequest {
     /// Videos per connected channel per day: 0.5 = 1 every 2 days (start),
     /// up to 4.0 (the future full rate).
     pub per_channel_per_day: f64,
+    /// Max uploads per rolling 24h project-wide (quota-driven; default 6 —
+    /// the default YouTube API quota only fits ~6 uploads/day).
+    #[serde(default)]
+    pub daily_upload_budget: Option<i64>,
 }
 
 /// GET /api/admin/education-schedule — current education-posting rate.
@@ -3605,9 +3609,32 @@ pub async fn get_education_schedule(
     .await
     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     let per_day: f64 = value.and_then(|v| v.parse().ok()).unwrap_or(0.5);
+    let budget: Option<String> = sqlx::query_scalar(
+        "SELECT setting_value FROM system_settings WHERE setting_key = 'education_daily_upload_budget'",
+    )
+    .fetch_optional(&state.db_pool)
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let budget: i64 = budget.and_then(|v| v.parse().ok()).unwrap_or(6);
+    let channels: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM education_linkages WHERE active = TRUE")
+            .fetch_one(&state.db_pool)
+            .await
+            .unwrap_or(0);
+    let effective = if channels > 0 {
+        format!(
+            "1 video every {:.1} days per channel",
+            (channels as f64 / budget as f64).max(0.0)
+        )
+    } else {
+        "no active channels".to_string()
+    };
     Ok(Json(serde_json::json!({
         "success": true,
         "per_channel_per_day": per_day,
+        "daily_upload_budget": budget,
+        "active_channels": channels,
+        "effective_distribution": effective,
         "cadence_label": if per_day >= 1.0 {
             format!("{:.0} video(s) per day per channel", per_day)
         } else {
@@ -3639,9 +3666,25 @@ pub async fn set_education_schedule(
     .execute(&state.db_pool)
     .await
     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    if let Some(b) = payload.daily_upload_budget {
+        let b = b.clamp(1, 100);
+        sqlx::query(
+            "INSERT INTO system_settings (setting_key, setting_value, setting_type, description, updated_by, updated_at)
+             VALUES ('education_daily_upload_budget', $1, 'number',
+                     'Max education video uploads per rolling 24h (quota-driven).', $2, NOW())
+             ON CONFLICT (setting_key)
+             DO UPDATE SET setting_value = $1, updated_by = $2, updated_at = NOW()",
+        )
+        .bind(format!("{b}"))
+        .bind(claims.sub.parse::<i32>().unwrap_or(0))
+        .execute(&state.db_pool)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    }
     Ok(Json(serde_json::json!({
         "success": true,
         "per_channel_per_day": rate,
+        "daily_upload_budget": payload.daily_upload_budget,
     })))
 }
 
