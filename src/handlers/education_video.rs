@@ -89,6 +89,20 @@ async fn credits(
         Err(e) => return e,
     };
 
+    // ADMINS BYPASS CREDITS (owner directive Nov 16 2026) — unlimited display.
+    if claims.is_staff || claims.is_superuser {
+        return (
+            StatusCode::OK,
+            Json(json!({
+                "success": true,
+                "purchased": 9999,
+                "used": 0,
+                "remaining": 9999,
+                "admin_bypass": true,
+            })),
+        );
+    }
+
     let row = match sqlx::query(
         "SELECT COALESCE(SUM(credits_purchased), 0)::BIGINT AS purchased,
                 COALESCE(SUM(credits_used), 0)::BIGINT AS used
@@ -748,32 +762,38 @@ async fn generate(
         .map(|u| u.trim().to_string())
         .filter(|u| u.starts_with("http://") || u.starts_with("https://"));
 
-    // Atomic credit check + consume in a single UPDATE ... RETURNING.
-    let consumed: Option<Uuid> = sqlx::query_scalar(
-        "UPDATE education_video_bundles
-            SET credits_used = credits_used + 1, updated_at = NOW()
-          WHERE id = (
-                SELECT id FROM education_video_bundles
-                 WHERE user_id = $1 AND payment_status = 'completed'
-                   AND credits_used < credits_purchased
-                 ORDER BY created_at ASC
-                 LIMIT 1
-          )
-         RETURNING id",
-    )
-    .bind(uid)
-    .fetch_optional(&state.db_pool)
-    .await
-    .unwrap_or(None);
-
-    if consumed.is_none() {
-        return (
-            StatusCode::PAYMENT_REQUIRED,
-            Json(
-                json!({"success": false, "error": "No video credits remaining. Purchase a bundle to continue."}),
-            ),
-        );
-    }
+    // ADMINS BYPASS CREDITS (owner directive Nov 16 2026) — same as website_video.
+    let is_admin = claims.is_staff || claims.is_superuser;
+    let bundle_id: Option<Uuid> = if is_admin {
+        None
+    } else {
+        // Atomic credit check + consume in a single UPDATE ... RETURNING.
+        let consumed: Option<Uuid> = sqlx::query_scalar(
+            "UPDATE education_video_bundles
+                SET credits_used = credits_used + 1, updated_at = NOW()
+              WHERE id = (
+                    SELECT id FROM education_video_bundles
+                     WHERE user_id = $1 AND payment_status = 'completed'
+                       AND credits_used < credits_purchased
+                     ORDER BY created_at ASC
+                     LIMIT 1
+              )
+             RETURNING id",
+        )
+        .bind(uid)
+        .fetch_optional(&state.db_pool)
+        .await
+        .unwrap_or(None);
+        if consumed.is_none() {
+            return (
+                StatusCode::PAYMENT_REQUIRED,
+                Json(
+                    json!({"success": false, "error": "No video credits remaining. Purchase a bundle to continue."}),
+                ),
+            );
+        }
+        consumed
+    };
 
     let brief = req.brief.unwrap_or_default();
     let style = req.style.unwrap_or_else(|| {
@@ -841,11 +861,12 @@ async fn generate(
     {
         Ok(id) => id,
         Err(e) => {
-            // Refund the consumed credit so a DB failure doesn't burn it.
+            // Refund the consumed credit so a DB failure doesn't burn it
+            // (admins never consumed one — bundle_id is None and the UPDATE no-ops).
             let _ = sqlx::query(
                 "UPDATE education_video_bundles SET credits_used = credits_used - 1, updated_at = NOW() WHERE id = $1",
             )
-            .bind(consumed)
+            .bind(bundle_id)
             .execute(&state.db_pool)
             .await;
             return (
