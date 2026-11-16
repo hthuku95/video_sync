@@ -1079,11 +1079,7 @@ impl YouTubeClient {
         let response = self
             .client
             .get(url)
-            .query(&[
-                ("part", "status"),
-                ("id", video_id),
-                ("key", &self.api_key),
-            ])
+            .query(&[("part", "status"), ("id", video_id), ("key", &self.api_key)])
             .send()
             .await?;
 
@@ -1093,9 +1089,11 @@ impl YouTubeClient {
             // Quota (403/429) is the common error here; surface it as a hard
             // error so callers can skip the check rather than misclassify.
             if status.as_u16() == 403 || status.as_u16() == 429 {
-                return Err(
-                    format!("YouTube quota error checking video {}: {}", video_id, error_text).into(),
-                );
+                return Err(format!(
+                    "YouTube quota error checking video {}: {}",
+                    video_id, error_text
+                )
+                .into());
             }
             return Err(format!("Failed to check video {}: {}", video_id, error_text).into());
         }
@@ -1631,12 +1629,13 @@ pub fn build_google_oauth_url(
 ) -> String {
     let scope_string = scopes.join(" ");
 
-    // Using prompt=select_account allows users to:
-    // 1. See all Google accounts signed into Chrome
-    // 2. Pick an existing account OR sign in with a new one
-    // 3. Connect YouTube channels from ANY Google account (not just the one they used to sign up)
+    // prompt=consent + select_account (owner hit Nov 16 2026): Google only
+    // returns a refresh_token on FIRST authorization — on re-consent it omits
+    // the token and the connect flow fails with "no necessary credentials".
+    // prompt=consent FORCES Google to always issue a refresh_token; keeping
+    // select_account so users can still pick any of their Google accounts.
     format!(
-        "https://accounts.google.com/o/oauth2/v2/auth?client_id={}&redirect_uri={}&response_type=code&scope={}&access_type=offline&state={}&prompt=select_account",
+        "https://accounts.google.com/o/oauth2/v2/auth?client_id={}&redirect_uri={}&response_type=code&scope={}&access_type=offline&state={}&prompt=consent select_account",
         urlencoding::encode(client_id),
         urlencoding::encode(redirect_uri),
         urlencoding::encode(&scope_string),
