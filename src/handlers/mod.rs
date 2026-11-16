@@ -6,12 +6,10 @@ pub mod background;
 pub mod background_routes;
 pub mod campaigns;
 pub mod chat;
-pub mod clipping; // 📹 YouTube clipping feature
 pub mod crypto_payments; // 💳 USDC on Base payments (x402) for studio offers
 pub mod gig_templates; // 💼 Fiverr/PPH gig templates + sample generation
 pub mod health; // 🏥 Health check and monitoring endpoints
 pub mod jobs; // 🆕 Job control endpoints
-pub mod manual_clipping; // ✂️ Manual clipping — paste URL, get download links
 pub mod output;
 pub mod paypal;
 pub mod prospects; // 🎯 Admin prospect finder

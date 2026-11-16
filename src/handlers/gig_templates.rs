@@ -8,7 +8,7 @@
 //   DELETE /api/gig-samples/:id                — delete a sample         (auth)
 
 use crate::middleware::auth::auth_middleware;
-use crate::middleware::clipping_access::clipping_access_middleware;
+use crate::middleware::admin::admin_or_whitelisted_middleware;
 use crate::models::auth::Claims;
 use crate::AppState;
 use axum::{
@@ -33,7 +33,7 @@ pub fn gig_template_routes() -> Router {
             post(api_generate_sample),
         )
         .route("/api/gig-samples/:id", delete(api_delete_sample))
-        .layer(axum::middleware::from_fn(clipping_access_middleware))
+        .layer(axum::middleware::from_fn(admin_or_whitelisted_middleware))
         .layer(axum::middleware::from_fn(auth_middleware));
 
     public.merge(protected)

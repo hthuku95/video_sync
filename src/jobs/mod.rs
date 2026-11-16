@@ -11,20 +11,10 @@ use uuid::Uuid;
 
 use crate::services::redis_pubsub::PubSubBus;
 
-pub mod analytics_sync_job;
-pub mod clipping_job;
-pub mod clipping_supervisor;
-pub mod clipping_worker;
 pub mod education_post_worker;
-pub mod error_classifier;
-pub mod job_claimer;
-pub mod manual_clipping_job;
 pub mod token_refresh;
-pub mod twitch_mapper_job;
 pub mod video_job;
-pub mod worker_config;
 
-pub use analytics_sync_job::AnalyticsSyncJob;
 
 /// Unique identifier for a background job
 pub type JobId = String;
