@@ -10,6 +10,7 @@ pub mod models;
 pub mod rusty_ytdl_client; // Pure Rust YouTube downloader (last resort)
 pub mod smart_clipping;
 pub mod ytdlp_api_client; // FastAPI yt-dlp microservice (HTTP API)
+pub mod ytdlp_client; // Legacy yt-dlp CLI wrapper (kept: apify fallback imports it)
 
 pub use rusty_ytdl_client::RustyYtdlClient;
 pub use ytdlp_api_client::YtdlpApiClient;

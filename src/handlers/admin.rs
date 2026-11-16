@@ -175,7 +175,6 @@ pub fn admin_routes() -> Router {
             "/api/admin/test/search-content",
             post(api_test_search_content),
         )
-        .route()
         .route(
             "/api/admin/reference-assets/normalize",
             post(api_normalize_reference_asset),
