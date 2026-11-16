@@ -223,6 +223,10 @@ pub fn youtube_routes() -> Router {
         )
         .route("/api/education/topics", get(get_education_topic_menu))
         .route("/api/education/jobs", get(list_education_post_jobs))
+        .route(
+            "/api/education/generate-now",
+            post(generate_education_video_now),
+        )
         .layer(axum::middleware::from_fn(
             crate::middleware::youtube_access::youtube_access_middleware,
         ))
@@ -4564,4 +4568,86 @@ pub async fn list_education_post_jobs(
         .collect();
 
     Ok(Json(json!({"success": true, "jobs": jobs})))
+}
+
+/// POST /api/education/generate-now {"channel_db_id": N} — trigger an
+/// immediate generate+post run for one of the caller's channels. Counts
+/// against the rolling 24h quota budget (the scheduler counts ALL jobs
+/// created in the window, manual ones included).
+#[derive(Deserialize)]
+pub struct GenerateNowRequest {
+    pub channel_db_id: i32,
+}
+
+pub async fn generate_education_video_now(
+    Extension(state): Extension<Arc<AppState>>,
+    Extension(claims): Extension<crate::models::auth::Claims>,
+    Json(payload): Json<GenerateNowRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let user_id = claims.sub.parse::<i32>().unwrap_or(0);
+
+    // Ownership + linkage lookup (the channel's education topic drives the brief)
+    let row = sqlx::query_as::<_, (i32, String)>(
+        "SELECT el.id, el.topic FROM education_linkages el
+         JOIN connected_youtube_channels c ON c.id = el.connected_channel_id
+         WHERE el.connected_channel_id = $1 AND c.user_id = $2 AND el.active = TRUE",
+    )
+    .bind(payload.channel_db_id)
+    .bind(user_id)
+    .fetch_optional(&state.db_pool)
+    .await
+    .map_err(|_| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"success": false, "message": "Database error"})),
+        )
+    })?;
+    let Some((linkage_id, topic)) = row else {
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(
+                json!({"success": false, "message": "No active education linkage for this channel"}),
+            ),
+        ));
+    };
+
+    // Refuse duplicates — one run per channel at a time
+    let active: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM education_post_jobs WHERE connected_channel_id = $1 AND status IN ('queued','generating','uploading')",
+    )
+    .bind(payload.channel_db_id)
+    .fetch_one(&state.db_pool)
+    .await
+    .unwrap_or(0);
+    if active > 0 {
+        return Err((
+            StatusCode::CONFLICT,
+            Json(
+                json!({"success": false, "message": "This channel already has a queued or running video"}),
+            ),
+        ));
+    }
+
+    let job_id: Uuid = sqlx::query_scalar(
+        "INSERT INTO education_post_jobs (linkage_id, connected_channel_id, topic, status, scheduled_for)
+         VALUES ($1, $2, $3, 'queued', NOW()) RETURNING id",
+    )
+    .bind(linkage_id)
+    .bind(payload.channel_db_id)
+    .bind(&topic)
+    .fetch_one(&state.db_pool)
+    .await
+    .map_err(|_| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"success": false, "message": "Failed to queue the job"})),
+        )
+    })?;
+
+    tracing::info!(job = %job_id, channel = %payload.channel_db_id, "🎓 manual generate-now queued");
+    Ok(Json(json!({
+        "success": true,
+        "job_id": job_id,
+        "message": "Queued — research, generation, QA, and YouTube posting start within a few minutes"
+    })))
 }
