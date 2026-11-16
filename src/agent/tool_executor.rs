@@ -5348,6 +5348,7 @@ async fn execute_generate_long_form_video_value(
             idempotency_key,
             reference_images: vec![],
         nim_profile: None,
+        lane: "interactive".to_string(),
         },
     )
     .await

@@ -36,6 +36,9 @@ impl WorkflowStatus {
 #[derive(Debug, Clone)]
 pub struct NewWorkflow {
     pub workflow_type: String,
+    /// Scheduling lane: "interactive" (someone waiting) or "background"
+    /// (scheduled batch). Claimers filter by lane. Default: interactive.
+    pub lane: String,
     pub idempotency_key: Option<String>,
     pub status: WorkflowStatus,
     pub session_uuid: Option<String>,
@@ -105,6 +108,7 @@ impl WorkflowRuntime {
             INSERT INTO app_workflows (
                 idempotency_key,
                 workflow_type,
+                lane,
                 status,
                 session_uuid,
                 user_id,
@@ -116,7 +120,7 @@ impl WorkflowRuntime {
                 artifact_requirements,
                 last_heartbeat_at
             )
-            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,NOW())
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,NOW())
             ON CONFLICT (idempotency_key) WHERE idempotency_key IS NOT NULL
             DO NOTHING
             RETURNING id
@@ -124,6 +128,7 @@ impl WorkflowRuntime {
         )
         .bind(workflow.idempotency_key.clone())
         .bind(&workflow.workflow_type)
+        .bind(&workflow.lane)
         .bind(workflow.status.as_str())
         .bind(workflow.session_uuid.as_deref())
         .bind(workflow.user_id)
@@ -669,14 +674,8 @@ impl WorkflowRuntime {
         .await
         .map_err(|e| format!("Failed to skip workflow node {node_key}: {e}"))?;
 
-        self.append_event(
-            workflow_id,
-            "node_skipped",
-            Some(node_key),
-            reason,
-            details,
-        )
-        .await
+        self.append_event(workflow_id, "node_skipped", Some(node_key), reason, details)
+            .await
     }
 
     // ── Durable queue primitives (pipeline_worker) ──────────────────────────
@@ -695,6 +694,7 @@ impl WorkflowRuntime {
         &self,
         claimed_by: &str,
         lease_minutes: i32,
+        lane: &str,
     ) -> Result<Option<ClaimedWorkflow>, String> {
         let row = sqlx::query_as::<_, (Uuid, String, Option<String>, Option<Uuid>, Value)>(
             r#"
@@ -710,6 +710,7 @@ impl WorkflowRuntime {
                 SELECT id FROM app_workflows
                  WHERE status = 'queued'
                    AND workflow_type LIKE 'agentic\_%'
+                   AND lane = $3
                  ORDER BY priority ASC, created_at ASC
                  FOR UPDATE SKIP LOCKED
                  LIMIT 1
@@ -720,6 +721,7 @@ impl WorkflowRuntime {
         )
         .bind(claimed_by)
         .bind(lease_minutes)
+        .bind(lane)
         .fetch_optional(&self.pool)
         .await
         .map_err(|e| format!("Failed to claim workflow: {}", e))?;

@@ -592,6 +592,7 @@ async fn process_pending_post(state: &Arc<AppState>, campaign: &CampaignRow, pos
         idempotency_key: None,
         reference_images: get_campaign_file_urls(state, campaign.id).await,
         nim_profile: None,
+        lane: "interactive".to_string(),
     };
 
     match AgenticServicePipeline::start(state.clone(), campaign.service_type.clone(), input).await {

@@ -651,6 +651,7 @@ impl PortfolioTestRunner {
                 idempotency_key: Some(format!("test-run:{}", scenario.slug)),
                 reference_images: vec![],
                 nim_profile: None,
+                lane: "interactive".to_string(),
             },
         })
     }
@@ -688,6 +689,7 @@ impl PortfolioTestRunner {
                 idempotency_key: Some(format!("test-run:{}", scenario.slug)),
                 reference_images: vec![],
                 nim_profile: None,
+                lane: "interactive".to_string(),
             },
         })
     }

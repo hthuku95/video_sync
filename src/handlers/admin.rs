@@ -8708,6 +8708,7 @@ pub async fn api_create_delivery(
         idempotency_key: Some(format!("delivery-agentic:{delivery_id}")),
         reference_images: vec![],
         nim_profile: None,
+        lane: "interactive".to_string(),
     };
     let workflow_id = match crate::services::AgenticServicePipeline::start(
         state.clone(),
@@ -9164,6 +9165,7 @@ pub async fn api_generate_dfy_portfolio_samples(
             idempotency_key: Some(format!("portfolio-dfy:{}", service.slug)),
             reference_images: vec![],
             nim_profile: None,
+            lane: "interactive".to_string(),
         };
         let slug = service.slug;
 
@@ -9654,6 +9656,7 @@ pub async fn api_generate_service_portfolio_sample(
                     idempotency_key: Some(format!("service-sample:{}", slug)),
                     reference_images: vec![],
                     nim_profile: None,
+                    lane: "interactive".to_string(),
                 };
 
                 match crate::services::AgenticServicePipeline::start(

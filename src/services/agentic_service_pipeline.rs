@@ -199,6 +199,12 @@ pub struct ServiceInput {
     pub source_record_id: Option<Uuid>,
     pub idempotency_key: Option<String>,
     pub reference_images: Vec<String>,
+    /// Scheduling lane (owner design Nov 16 2026): "interactive" = someone is
+    /// waiting (paid customers, prospecting samples, admin tests — claimed by
+    /// vs-worker-1); "background" = scheduled batch (education-posting network,
+    /// future campaigns — claimed by vs-edu-worker). Default: interactive.
+    #[serde(default)]
+    pub lane: String,
     /// NIM profile override (owner directive Nov 13 2026): when "education",
     /// the run uses the dedicated NVIDIA_API_KEY_EDUCATION key instead of the
     /// shared NIM key — education-posting jobs must not consume the main
@@ -308,6 +314,7 @@ impl AgenticServicePipeline {
                     "duration": input.duration_seconds,
                     "input": input_snapshot,
                 }),
+                lane: if input.lane == "background" { "background".to_string() } else { "interactive".to_string() },
                 artifact_requirements: json!({
                     "expects_video": service_type.expects_video(),
                     "expects_image": service_type.expects_image(),

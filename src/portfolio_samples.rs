@@ -221,6 +221,7 @@ pub fn service_input_for(
         idempotency_key: None,
         reference_images: vec![],
         nim_profile: None,
+        lane: "interactive".to_string(),
     }
 }
 

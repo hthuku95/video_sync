@@ -887,6 +887,7 @@ async fn generate(
             idempotency_key: Some(format!("website-video-agentic:{delivery_id}")),
             reference_images: vec![],
         nim_profile: None,
+        lane: "interactive".to_string(),
         },
     )
     .await;

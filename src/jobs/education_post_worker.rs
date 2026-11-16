@@ -412,6 +412,7 @@ async fn execute_job_inner(
                 idempotency_key: Some(format!("education-post:{job_id}")),
                 reference_images: vec![],
                 nim_profile: Some("education".to_string()),
+                lane: "background".to_string(),
             },
         )
         .await
