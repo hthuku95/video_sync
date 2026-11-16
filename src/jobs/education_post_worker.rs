@@ -79,6 +79,13 @@ pub async fn run_education_worker_loop(state: Arc<AppState>) {
 // ── Scheduler ───────────────────────────────────────────────────────────────
 
 async fn schedule_due_jobs(state: &Arc<AppState>) -> Result<(), String> {
+    // DAILY UPLOAD BUDGET (owner design Nov 15-16 2026): the YouTube Data API
+    // quota caps uploads project-wide (default 10,000 units/day; each upload
+    // costs 1,600 → ~6 uploads/day until a quota increase is approved). The
+    // scheduler posts to only a ROTATING SUBSET of channels each day, chosen
+    // oldest-posted-first, so the distribution stays FAIR across all channels:
+    // a channel skipped today is first in line tomorrow. Effective per-channel
+    // rate = budget ÷ active channels.
     let rate: f64 = sqlx::query_scalar::<_, String>(
         "SELECT setting_value FROM system_settings WHERE setting_key = 'education_videos_per_channel_per_day'",
     )
@@ -89,6 +96,25 @@ async fn schedule_due_jobs(state: &Arc<AppState>) -> Result<(), String> {
     .and_then(|v| v.parse::<f64>().ok())
     .unwrap_or(0.5);
     let cadence_hours = (24.0 / rate.max(0.05)).max(6.0);
+
+    // Quota budget: max uploads in the rolling 24h window (all statuses).
+    let budget: i64 = sqlx::query_scalar::<_, String>(
+        "SELECT setting_value FROM system_settings WHERE setting_key = 'education_daily_upload_budget'",
+    )
+    .fetch_optional(&state.db_pool)
+    .await
+    .ok()
+    .flatten()
+    .and_then(|v| v.parse::<i64>().ok())
+    .unwrap_or(6);
+
+    let uploads_last_24h: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM education_post_jobs WHERE created_at > NOW() - INTERVAL '24 hours'",
+    )
+    .fetch_one(&state.db_pool)
+    .await
+    .unwrap_or(0);
+    let remaining_today = (budget - uploads_last_24h).max(0);
 
     // Active linkages, oldest-posted first (staggered round-robin).
     let rows = sqlx::query_as::<_, (i32, String, Option<chrono::DateTime<chrono::Utc>>)>(
@@ -112,7 +138,13 @@ async fn schedule_due_jobs(state: &Arc<AppState>) -> Result<(), String> {
     let now = chrono::Utc::now();
     let mut created = 0usize;
     for (linkage_id, topic, last_job) in rows {
-        if created >= MAX_JOBS_PER_CYCLE {
+        if remaining_today == 0 {
+            tracing::info!(
+                "🎓 daily upload budget exhausted ({budget}/24h) — channels rotate fairly, resume next window"
+            );
+            break;
+        }
+        if created >= MAX_JOBS_PER_CYCLE.min(remaining_today as usize) {
             break;
         }
         let due = match last_job {
