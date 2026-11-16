@@ -3889,6 +3889,2890 @@ async fn bulk_send_prospect_emails(
     })))
 }
 
+#[derive(serde::Deserialize)]
+struct BulkSendEmailRequest {
+    service_type: Option<String>,
+    contact_status: Option<String>,
+    fresh_days: Option<i64>,
+    include_contacted: Option<bool>,
+    limit: Option<i64>,
+}
+
+impl BulkSendEmailRequest {
+    fn include_contacted(&self) -> bool {
+        self.include_contacted.unwrap_or(false)
+    }
+}
+
+async fn delete_prospect(
+    Extension(state): Extension<Arc<AppState>>,
+    Extension(claims): Extension<crate::models::auth::Claims>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
+    let is_admin = claims.is_superuser || claims.is_staff;
+    if !is_admin {
+        let owned: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM prospects WHERE id = $1 AND sourced_by = $2)",
+        )
+        .bind(id)
+        .bind(claims.sub.parse::<i32>().unwrap_or(0))
+        .fetch_one(&state.db_pool)
+        .await
+        .unwrap_or(false);
+        if !owned {
+            return Err((
+                StatusCode::FORBIDDEN,
+                Json(ErrorResponse {
+                    success: false,
+                    message: "You can only act on prospects you sourced.".to_string(),
+                }),
+            ));
+        }
+    }
+    sqlx::query("DELETE FROM prospects WHERE id=$1")
+        .bind(id)
+        .execute(&state.db_pool)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    success: false,
+                    message: e.to_string(),
+                }),
+            )
+        })?;
+    Ok(Json(json!({ "success": true })))
+}
+
+/// Generate a personalized cold outreach DM using Gemini, given a delivery URL.
+async fn generate_outreach_message(
+    Extension(state): Extension<Arc<AppState>>,
+    Extension(claims): Extension<crate::models::auth::Claims>,
+    Path(id): Path<Uuid>,
+    Json(payload): Json<GenerateOutreachRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
+    // Service switch (owner directive Sep 2026): outreach generation runs only
+    // while the outreach group is on. Sending stored scripts needs no flag.
+    if !crate::services::service_flags::service_enabled(&state.db_pool, "outreach").await {
+        return Err((
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ErrorResponse {
+                success: false,
+                message: "Outreach generation is currently disabled (service_flags).".to_string(),
+            }),
+        ));
+    }
+    let row = sqlx::query(
+        "SELECT display_name, subscriber_count, avg_viewer_count, content_category,
+                prospect_type, dm_script_creator, service_type, x_dm_script, email_script,
+                instagram_handle, twitter_handle, platform, sourced_by, contact_enrichment
+         FROM prospects WHERE id=$1",
+    )
+    .bind(id)
+    .fetch_optional(&state.db_pool)
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                success: false,
+                message: e.to_string(),
+            }),
+        )
+    })?
+    .ok_or_else(|| {
+        (
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                success: false,
+                message: "Prospect not found".to_string(),
+            }),
+        )
+    })?;
+
+    let name: String = row.get("display_name");
+    let subs: Option<i64> = row.get("subscriber_count");
+    let viewers: Option<i64> = row.get("avg_viewer_count");
+    let category: String = row
+        .get::<Option<String>, _>("content_category")
+        .unwrap_or_else(|| "content".to_string());
+    let pt: String = row.get("prospect_type");
+    let platform: String = row.get::<Option<String>, _>("platform").unwrap_or_default();
+    let existing_dm: String = row
+        .get::<Option<String>, _>("dm_script_creator")
+        .unwrap_or_default();
+    let service: String = row
+        .get::<Option<String>, _>("service_type")
+        .unwrap_or_else(|| default_service_for_prospect(&category, &pt, &platform));
+
+    // Disabled-service gate (owner directives Sep 2026 + Nov 8): outreach for
+    // parked services is 503'd before any LLM spend (same rule as the
+    // Instagram-lead composer).
+    if !crate::services::service_flags::service_enabled(&state.db_pool, &service).await {
+        return Err((
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ErrorResponse {
+                success: false,
+                message: format!(
+                    "'{service}' outreach is switched off. Prospects are only messaged for the currently enabled services ({}).",
+                    crate::services::service_flags::enabled_services(&state.db_pool).await.join(", ")
+                ),
+            }),
+        ));
+    }
+
+    let sourced_by: Option<i32> = row.get::<Option<i32>, _>("sourced_by");
+    let assigned_app: Option<String> = row
+        .get::<Option<serde_json::Value>, _>("contact_enrichment")
+        .and_then(|ce| {
+            ce.get("assigned_app")
+                .and_then(|v| v.as_str().map(String::from))
+        });
+    let existing_x_dm: String = row
+        .get::<Option<String>, _>("x_dm_script")
+        .unwrap_or_else(|| default_x_dm(&name, &service));
+    let existing_email: String = row
+        .get::<Option<String>, _>("email_script")
+        .unwrap_or_else(|| default_email_script(&name, &service));
+    // Campaigns switch OFF: stored scripts from older runs may contain
+    // monthly-campaign / subscription wording that the LLM would echo as
+    // tone references (observed live). When OFF, the tone inputs are
+    // campaign-neutral by construction.
+    let campaigns_on = crate::services::service_flags::campaigns_enabled(&state.db_pool).await;
+
+    let (existing_x_dm, existing_email) = if !campaigns_on {
+        (
+            "Professional, concise, friendly; one-time product bundle offer only.".to_string(),
+            "Professional, concise, friendly; one-time product bundle offer only.".to_string(),
+        )
+    } else {
+        (existing_x_dm, existing_email)
+    };
+    let audience = subs.or(viewers).unwrap_or(0);
+
+    if state.qwen_client.is_none()
+        && state.nvidia_nim_client.is_none()
+        && state.gemma_client.is_none()
+        && state.video_gemini_client.is_none()
+        && state.gemini_client.is_none()
+    {
+        return Err((
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ErrorResponse {
+                success: false,
+                message: "No LLM configured".to_string(),
+            }),
+        ));
+    }
+
+    let audience_label = if audience >= 1_000_000 {
+        format!("{:.1}M", audience as f64 / 1_000_000.0)
+    } else if audience >= 1_000 {
+        format!("{:.0}K", audience as f64 / 1_000.0)
+    } else {
+        audience.to_string()
+    };
+
+    // Studio (DFY) prospects get a different pitch: we produce and deliver
+    // the videos for them, at $100-$200 for 10-30 videos, with a 15-min call.
+    let is_studio = assigned_app.as_deref() == Some("studio");
+    let pitch_focus = if is_studio {
+        match service.as_str() {
+            "landing_page" => "done-for-you animated videos of ANY type generated from your website URL — how-to, marketing, product demo, explainer, testimonial, brand story. We crawl your site, learn your business, and produce 10-30 videos for you to download and use. You do nothing — we handle everything.",
+            "education" => "done-for-you animated educational videos of ANY type — math, science, coding, language, history, finance, and more. We produce 10-30 lesson videos with equations, diagrams, motion graphics, VFX, and 3D depth with narration. You do nothing — we handle everything.",
+            _ => service_offer_line(&service),
+        }
+    } else {
+        service_offer_line(&service)
+    };
+    // Campaigns app-wide switch (owner directive Nov 8 2026): when OFF,
+    // landing_page/education outreach advertises ONLY the one-time video
+    // bundles ($50-$100 for 10-30 videos) — no monthly-campaign or
+    // daily-auto-posting wording. Studio copy is untouched, and when ON
+    // everything works exactly as before.
+    let bundle_service = matches!(service.as_str(), "landing_page" | "education");
+    let pitch_focus = if !is_studio && !campaigns_on && bundle_service {
+        match service.as_str() {
+            "landing_page" => "animated videos of ANY type generated from their website URL — how-to, marketing, product demo, explainer, testimonial, brand story. You crawl their site, learn their business, and produce the videos they order to download and use.",
+            "education" => "animated educational videos of ANY type — math, science, coding, language, history, finance, and more — with equations, diagrams, motion graphics, VFX, and 3D depth with narration.",
+            _ => pitch_focus,
+        }
+    } else {
+        pitch_focus
+    };
+    let price_line = if is_studio {
+        "$100-$200 for 10-30 fully produced animated videos (done-for-you)"
+    } else if !campaigns_on && bundle_service {
+        "one-time bundles: 10 videos for $50 or 30 videos for $100 (no subscription)"
+    } else {
+        service_price_line(&service)
+    };
+    // Landing page + education have BOTH a one-time video bundle (10 for $50 /
+    // 30 for $100) and a monthly campaign. Lead outreach with the one-time offer
+    // and mention the campaign as the recurring upsell. Clipping services lead
+    // with the campaign (their core value is ongoing daily clips). When the
+    // campaigns switch is OFF, bundles-only (no campaign/subscription wording).
+    let one_time_offer: Option<&str> = if is_studio {
+        Some("done-for-you: 10-30 fully produced animated videos for $100-$200 — we handle everything, you just receive the delivery link")
+    } else {
+        match service.as_str() {
+            "landing_page" => Some("one-time bundle: 10 videos for $50 or 30 videos for $100, generated from their website URL"),
+            "education" => Some("one-time bundle: 10 lesson videos for $50 or 30 for $100"),
+            _ => None,
+        }
+    };
+    let lead_offer_block = if is_studio {
+        match one_time_offer {
+            Some(o) => format!("PRIMARY (lead with this): {o}"),
+            None => "PRIMARY (lead with this): done-for-you animated video bundles.".to_string(),
+        }
+    } else if !campaigns_on {
+        match one_time_offer {
+            Some(o) => format!(
+                "OFFER (lead with this): {o}\nHARD CONSTRAINT: The DM and email must NOT contain the words \"campaign\", \"subscription\", or any mention of recurring/monthly/daily posting. Everything offered is one-time: they pay once, receive their videos, done. Violating this constraint is a failed response."
+            ),
+            None => format!(
+                "OFFER (lead with this): one-time custom animated videos as described in the offer line.\nHARD CONSTRAINT: The DM and email must NOT contain the words \"campaign\", \"subscription\", or any mention of recurring/monthly/daily posting. Everything offered is one-time: they pay once, receive their videos, done. Violating this constraint is a failed response."
+            ),
+        }
+    } else {
+        one_time_offer
+            .map(|o| format!("PRIMARY (lead with this): {}\nSECONDARY (mention as the recurring option): monthly campaign subscription that generates and posts fresh videos daily.", o))
+            .unwrap_or_else(|| "PRIMARY (lead with this): monthly campaign subscription that generates and posts fresh videos daily.".to_string())
+    };
+    // Referral attribution: only whitelisted (non-admin) senders get their
+    // referral signup link attached — admins send plain outreach with no
+    // referral. Uses the acting user's own referral code (claims.sub), not the
+    // prospect's sourced_by, so the sender is the one attributed.
+    let acting_is_admin = claims.is_superuser || claims.is_staff;
+    let referral_url: Option<String> = if !acting_is_admin {
+        let uid: i32 = claims.sub.parse().unwrap_or(0);
+        if uid == 0 {
+            None
+        } else {
+            let app = if assigned_app.as_deref() == Some("studio") {
+                "studio"
+            } else {
+                app_subdomain_for_service(&service)
+            };
+            // Try to read an existing code for this user+app.
+            let existing: Option<String> = sqlx::query_scalar(
+                "SELECT code FROM referral_codes WHERE user_id = $1 AND app_slug = $2",
+            )
+            .bind(uid)
+            .bind(app)
+            .fetch_optional(&state.db_pool)
+            .await
+            .ok()
+            .flatten();
+            let code = match existing {
+                Some(c) => c,
+                None => {
+                    // Auto-create one (mirrors /api/referrals/my-codes).
+                    let new_code = format!("ref-{}-{}", app, &Uuid::new_v4().to_string()[..6]);
+                    sqlx::query(
+                    "INSERT INTO referral_codes (user_id, code, app_slug)                      VALUES ($1, $2, $3) ON CONFLICT (user_id, app_slug) WHERE app_slug IS NOT NULL DO NOTHING",
+                )
+                .bind(uid)
+                .bind(&new_code)
+                .bind(app)
+                .execute(&state.db_pool)
+                .await
+                .ok();
+                    // Re-read in case of race.
+                    sqlx::query_scalar::<_, String>(
+                        "SELECT code FROM referral_codes WHERE user_id = $1 AND app_slug = $2",
+                    )
+                    .bind(uid)
+                    .bind(app)
+                    .fetch_optional(&state.db_pool)
+                    .await
+                    .ok()
+                    .flatten()
+                    .unwrap_or(new_code)
+                }
+            };
+            Some(format!("https://videosync.ink/ref/{}/{}", app, code))
+        }
+    } else {
+        None
+    };
+
+    // Social handles for multi-channel outreach (X DM + email + manual IG DM).
+    let ig_handle: Option<String> = row.get("instagram_handle");
+    let _tw_handle: Option<String> = row.get("twitter_handle");
+    let ig_line = ig_handle
+        .as_deref()
+        .filter(|h| !h.is_empty())
+        .map(|h| {
+            let bare = h.trim_start_matches('@');
+            format!(
+                "Their Instagram: @{bare} (https://instagram.com/{bare}) — the sender will ALSO DM them on Instagram, so keep the X DM and email complementary, not duplicated."
+            )
+        })
+        .unwrap_or_default();
+    let ig_profile_url = ig_handle
+        .as_deref()
+        .filter(|h| !h.is_empty())
+        .map(|h| format!("https://instagram.com/{}", h.trim_start_matches('@')));
+    let prompt = format!(
+        r#"Write a personalized X DM and email from VideoSync to {name}, a {category} {pt} with {audience} audience.
+The subject already has a free sample ready at this link: {delivery_url}
+Include the delivery link naturally in both the DM and email — do NOT ask for permission to send it.
+{referral_block}
+{ig_line}
+
+Offer: {pitch_focus}
+Price: {price_line}
+{lead_offer_block}
+
+IMPORTANT: For landing_page, the system can generate ANY type of animated video from a website URL (how-to, marketing, product demo, explainer, testimonial, brand story, etc.) — not just hero sections. For education, it can generate ANY type of animated educational video (math, science, coding, language, history, finance, etc.) with equations, diagrams, motion graphics, VFX, and 3D depth. Mention this breadth naturally so the prospect knows the full capability.
+{studio_block}
+
+CRITICAL: The DM and email MUST both contain the free sample delivery link (provided above) and, if a referral/signup link is provided below, that link too. Do NOT omit either link. Do NOT start the message with "Verified", "Verified here", or any verification phrase — start with a genuine, personalized observation about their content/niche.
+
+X DM must be short and direct (under 280 chars). Email must include a subject and brief body.
+Be conversational, specific to their content/niche, and end with a soft call-to-action.
+DO NOT use emojis excessively. Return only the message text, no preamble.
+Return ONLY valid JSON:
+{{"x_dm":"...","email_script":"Subject: ...\n\n..."}}
+
+Tone references:
+X DM tone: {existing_x_dm}
+Email tone: {existing_email}
+Legacy DM tone: {existing_dm}"#,
+        name = name,
+        category = category,
+        pt = pt.replace('_', " "),
+        audience = audience_label,
+        pitch_focus = pitch_focus,
+        price_line = price_line,
+        lead_offer_block = one_time_offer
+            .map(|o| format!("PRIMARY (lead with this): {}\nSECONDARY (mention as the recurring option): monthly campaign subscription that generates and posts fresh videos daily.", o))
+            .unwrap_or_else(|| "PRIMARY (lead with this): monthly campaign subscription that generates and posts fresh videos daily.".to_string()),
+        studio_block = if is_studio {
+            "STUDIO (done-for-you) MODE: We produce and deliver the videos for the client — they do nothing. Mention a 15-min strategy call (Calendly) and that payment is via freelance escrow (deposit upfront, release on delivery).".to_string()
+        } else {
+            String::new()
+        },
+        delivery_url = payload.delivery_url,
+        referral_block = referral_url
+            .map(|u| format!("If they want to sign up or create an account, send them here: {u}\nMention it as an optional next step (e.g. \"you can create an account here\") — keep it light, not pushy."))
+            .unwrap_or_default(),
+        ig_line = ig_line,
+        existing_x_dm = existing_x_dm.chars().take(220).collect::<String>(),
+        existing_email = existing_email.chars().take(300).collect::<String>(),
+        existing_dm = if existing_dm.is_empty() {
+            "professional and friendly".to_string()
+        } else {
+            existing_dm.chars().take(200).collect()
+        },
+    );
+
+    let (x_dm, email_script) = match generate_text_best_effort(
+        state.qwen_client.as_ref(),
+        state.nvidia_nim_client.as_ref(),
+        state.gemma_client.as_ref(),
+        state
+            .video_gemini_client
+            .as_ref()
+            .or(state.gemini_client.as_ref()),
+        state.deepseek_client.as_ref(),
+        &prompt,
+    )
+    .await
+    {
+        Ok(text) => {
+            let cleaned = text
+                .trim()
+                .trim_start_matches("```json")
+                .trim_start_matches("```")
+                .trim_end_matches("```")
+                .trim();
+            match serde_json::from_str::<serde_json::Value>(cleaned) {
+                Ok(value) => (
+                    value["x_dm"]
+                        .as_str()
+                        .unwrap_or(&existing_x_dm)
+                        .trim()
+                        .to_string(),
+                    value["email_script"]
+                        .as_str()
+                        .unwrap_or(&existing_email)
+                        .trim()
+                        .to_string(),
+                ),
+                Err(_) => (text.trim().to_string(), existing_email),
+            }
+        }
+        Err(e) => {
+            return Err((
+                StatusCode::BAD_GATEWAY,
+                Json(ErrorResponse {
+                    success: false,
+                    message: format!("LLM error: {}", e),
+                }),
+            ))
+        }
+    };
+
+    // Field-level guarantee while the switch is OFF (shared helper in service_flags).
+    let (x_dm, email_script) = (
+        crate::services::service_flags::scrub_campaign_language(&x_dm, campaigns_on),
+        crate::services::service_flags::scrub_campaign_language(&email_script, campaigns_on),
+    );
+
+    let _ = sqlx::query(
+        "UPDATE prospects SET x_dm_script=$1, email_script=$2, updated_at=NOW() WHERE id=$3",
+    )
+    .bind(&x_dm)
+    .bind(&email_script)
+    .bind(id)
+    .execute(&state.db_pool)
+    .await;
+
+    Ok(Json(json!({
+        "success": true,
+        "outreach_message": x_dm,
+        "x_dm": x_dm,
+        "email_script": email_script,
+        "ig_profile_url": ig_profile_url,
+    })))
+}
+
+async fn generate_prospect_sample_pack(
+    Extension(state): Extension<Arc<AppState>>,
+    Extension(claims): Extension<crate::models::auth::Claims>,
+    Path(id): Path<Uuid>,
+    Json(req): Json<Option<GenerateProspectSamplePackRequest>>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
+    let is_admin = claims.is_superuser || claims.is_staff;
+    if !is_admin {
+        let owned: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM prospects WHERE id = $1 AND sourced_by = $2)",
+        )
+        .bind(id)
+        .bind(claims.sub.parse::<i32>().unwrap_or(0))
+        .fetch_one(&state.db_pool)
+        .await
+        .unwrap_or(false);
+        if !owned {
+            return Err((
+                StatusCode::FORBIDDEN,
+                Json(ErrorResponse {
+                    success: false,
+                    message: "You can only act on prospects you sourced.".to_string(),
+                }),
+            ));
+        }
+    }
+    let row = sqlx::query(
+        "SELECT display_name, platform, platform_url, content_category, channel_description,
+                service_type, external_url, sample_delivery_id, contact_enrichment
+         FROM prospects WHERE id=$1",
+    )
+    .bind(id)
+    .fetch_optional(&state.db_pool)
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                success: false,
+                message: e.to_string(),
+            }),
+        )
+    })?
+    .ok_or_else(|| {
+        (
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                success: false,
+                message: "Prospect not found".to_string(),
+            }),
+        )
+    })?;
+
+    let service: String = row
+        .get::<Option<String>, _>("service_type")
+        .unwrap_or_else(|| "landing_page".to_string());
+    // A/B testing: for landing_page and education prospects, randomly assign
+    // half to the self-serve app (app/learn) and half to the DFY studio app.
+    let existing_assigned: Option<String> = row
+        .get::<Option<serde_json::Value>, _>("contact_enrichment")
+        .and_then(|ce| {
+            ce.get("assigned_app")
+                .and_then(|v| v.as_str().map(String::from))
+        });
+    let is_new_assignment = existing_assigned.is_none();
+    let assigned_app: String = if let Some(a) = existing_assigned {
+        a
+    } else if service == "landing_page" || service == "education" {
+        if rand::random::<f64>() < 0.5 {
+            "studio".to_string()
+        } else if service == "landing_page" {
+            "app".to_string()
+        } else {
+            "learn".to_string()
+        }
+    } else {
+        app_subdomain_for_service(&service).to_string()
+    };
+    if is_new_assignment && (service == "landing_page" || service == "education") {
+        let _ = sqlx::query(
+            "UPDATE prospects SET contact_enrichment = COALESCE(contact_enrichment, '{}'::jsonb) || jsonb_build_object('assigned_app', $2::text) WHERE id = $1",
+        )
+        .bind(id)
+        .bind(&assigned_app)
+        .execute(&state.db_pool)
+        .await;
+    }
+    if let Some(existing) = row.get::<Option<Uuid>, _>("sample_delivery_id") {
+        return Ok(Json(json!({
+            "success": true,
+            "delivery_id": existing.to_string(),
+            "delivery_url": format!(
+                "https://{}.videosync.ink/delivery/{}",
+                if assigned_app == "studio" { "studio" } else { app_subdomain_for_service(&service) },
+                existing
+            ),
+            "message": "Sample pack already exists for this prospect."
+        })));
+    }
+
+    let request = req.unwrap_or(GenerateProspectSamplePackRequest {
+        source_url: None,
+        product_name: None,
+        offer_type: None,
+        notes: None,
+    });
+    let display_name: String = row.get("display_name");
+    let platform: String = row.get("platform");
+    let platform_url: String = row.get("platform_url");
+    let category: String = row
+        .get::<Option<String>, _>("content_category")
+        .unwrap_or_else(|| "SaaS / app".to_string());
+    let description: String = row
+        .get::<Option<String>, _>("channel_description")
+        .unwrap_or_default();
+    let service = request
+        .offer_type
+        .or_else(|| row.get::<Option<String>, _>("service_type"))
+        .unwrap_or_else(|| "landing_page".to_string());
+    let service = normalize_revenue_service(&service).to_string();
+    // Service switch (owner directive Sep 2026): sample packs render only for
+    // enabled services. Scoring/discovery stay untouched — only the expensive
+    // render is gated.
+    if !crate::services::service_flags::service_enabled(&state.db_pool, &service).await {
+        return Err((
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ErrorResponse {
+                success: false,
+                message: format!(
+                    "Sample packs for service '{service}' are currently disabled (service_flags)."
+                ),
+            }),
+        ));
+    }
+    let product_name = request.product_name.unwrap_or_else(|| display_name.clone());
+
+    // For kick_auto_clipper, use detected source creators' Kick channel as the source.
+    // For twitch_clipping CLIPPER prospects, use the clipped Twitch streamer's
+    // channel (detected_source_creators[0]) — creator prospects use their own URL.
+    let contact_enrich: Option<serde_json::Value> = row.get("contact_enrichment");
+    let clipper_source_url: Option<String> = if service == "kick_auto_clipper" {
+        contact_enrich.as_ref().and_then(|e| {
+            e.get("detected_source_creators")
+                .and_then(|c| c.as_array())
+                .and_then(|arr| arr.first())
+                .and_then(|c| c.as_str())
+                .map(|slug| format!("https://kick.com/{}", slug.trim()))
+        })
+    } else if service == "twitch_clipping" {
+        contact_enrich.as_ref().and_then(|e| {
+            e.get("detected_source_creators")
+                .and_then(|c| c.as_array())
+                .and_then(|arr| arr.first())
+                .and_then(|c| c.as_str())
+                .map(|login| {
+                    format!(
+                        "https://twitch.tv/{}",
+                        login.trim().trim_start_matches('@').to_lowercase()
+                    )
+                })
+        })
+    } else {
+        None
+    };
+
+    let source_url = request
+        .source_url
+        .or(clipper_source_url)
+        .or_else(|| row.get::<Option<String>, _>("external_url"))
+        .unwrap_or_else(|| platform_url.clone());
+    let has_product_url = source_url.starts_with("http://") || source_url.starts_with("https://");
+    let use_long_form_workflow = should_use_long_form_for_revenue_sample(&service, has_product_url);
+    let target_duration = service_target_duration_seconds(&service);
+    let long_form_style = service_long_form_style(&service);
+    let offer_type = service_long_form_offer_type(&service);
+    let service_offer = service_offer_line(&service);
+
+    let prompt = format!(
+        "Revenue sample pack for {product_name}. Create {service_offer}: 1 polished buyer-facing video/sample, 3 short hooks/caption variants, and a visual packaging concept. Category: {category}. Notes: {notes}. Public source: {source_url}.",
+        notes = request.notes.unwrap_or_default(),
+    );
+    let mut extra = json!({
+        "service_offer": service.clone(),
+        "service_offer_line": service_offer,
+        "revenue_v1": true,
+        "prospect_id": id,
+        "prospect_platform": platform,
+        "source_url": source_url.clone(),
+        "product_name": product_name.clone(),
+        "offer_type": offer_type.clone(),
+        "short_ad_variants": [
+            "Problem-solution hook",
+            "Founder/product walkthrough hook",
+            "Before-after transformation hook"
+        ],
+        "thumbnail_concept": format!("{} hero visual with bold benefit headline", display_name),
+        "workflow_engine": if use_long_form_workflow { "long_form_video_assembly" } else { "direct_delivery_render" },
+        "target_duration_seconds": if use_long_form_workflow { target_duration } else { 15.0 },
+        "segment_duration_seconds": 15.0,
+    });
+
+    if let Some(hero) = fetch_landing_page_hero(&source_url).await {
+        extra["reference_image_url"] = json!(hero);
+    }
+
+    // For landing_page: deep-crawl the website via BrowserBase so the LLM agent gets CSS tokens, all pages, and full content
+    let mut scraped_site = None;
+    if matches!(service.as_str(), "landing_page") && has_product_url {
+        match crate::browserbase_client::crawl_website(&source_url).await {
+            Ok(crawl) => {
+                let mut ctx = String::new();
+                ctx.push_str(&format!("## Website Crawl: {}\n\n", source_url));
+                if !crawl.css_info.is_empty() {
+                    ctx.push_str(&format!("### Design Tokens\n{}\n\n", crawl.css_info));
+                }
+                // Dedupe pages (locale variants of the same page carry identical
+                // content — the Monica crawl embedded the same page 6x in three
+                // languages, bloating the workflow JSONB into OOM territory on the
+                // 512MB free tier). Dedupe by URL path, then cap the payload.
+                let mut seen_paths: std::collections::HashSet<String> =
+                    std::collections::HashSet::new();
+                let mut pages_lines = Vec::new();
+                for p in &crawl.pages {
+                    let path_only = p
+                        .url
+                        .split("://")
+                        .nth(1)
+                        .unwrap_or(&p.url)
+                        .split('?')
+                        .next()
+                        .unwrap_or("")
+                        .trim_end_matches('/')
+                        .split('#')
+                        .next()
+                        .unwrap_or("")
+                        .to_string();
+                    if !seen_paths.insert(path_only) {
+                        continue;
+                    }
+                    pages_lines.push(format!("- {} ({})", p.title, p.url));
+                }
+                ctx.push_str(&format!("### Pages ({})\n", pages_lines.len()));
+                for line in &pages_lines {
+                    ctx.push_str(line);
+                    ctx.push('\n');
+                }
+                ctx.push_str("\n### Full Content\n");
+                // Cap the combined crawl content — the LLM reads the first N KB and
+                // that is where the signal is; the tail is locale duplicates.
+                let crawl_cap: usize = std::env::var("CRAWL_CONTEXT_MAX_CHARS")
+                    .ok()
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(48_000);
+                let mut combined = crawl.combined_markdown.clone();
+                if combined.len() > crawl_cap {
+                    combined.truncate(crawl_cap);
+                    combined.push_str("\n[... crawl truncated at cap ...]");
+                }
+                ctx.push_str(&combined);
+                extra["scraped_website_content"] = json!(ctx);
+                scraped_site = Some(ctx);
+            }
+            Err(e) => {
+                tracing::warn!("Website crawl failed for {}: {e}", source_url);
+            }
+        }
+    }
+
+    let gig_type: String = if use_long_form_workflow {
+        "long_form_video".to_string()
+    } else if service == "kick_auto_clipper" {
+        "clipping".to_string()
+    } else if matches!(
+        service.as_str(),
+        "manim_explainer"
+            | "whiteboard_animation"
+            | "kinetic_typography"
+            | "animated_infographic"
+            | "algorithm_viz"
+            | "investor_pitch"
+            | "year_in_review"
+            | "isometric_explainer"
+    ) {
+        service.clone()
+    } else {
+        "ui_mockup".to_string()
+    };
+    let duration = if use_long_form_workflow {
+        target_duration
+    } else if has_product_url {
+        15.0
+    } else {
+        8.0
+    };
+    let unlock_price = 0.0; // Prospect samples are always free — marketing material for DMs
+
+    let delivery_id: Uuid = sqlx::query_scalar(
+        "INSERT INTO deliveries (client_ref, title, gig_type, prompt, style, duration, extra_args,
+                                  status, sourced_from_prospect_id, unlock_price_usdc, source_url)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,'pending',$8,$9,$10)
+         RETURNING id",
+    )
+    .bind(format!("prospect:{id}"))
+    .bind(format!("Revenue sample pack for {}", display_name))
+    .bind(gig_type)
+    .bind(&prompt)
+    .bind(if use_long_form_workflow {
+        long_form_style
+    } else {
+        "modern"
+    })
+    .bind(duration)
+    .bind(&extra)
+    .bind(id)
+    .bind(unlock_price)
+    .bind(if has_product_url {
+        Some(source_url.as_str())
+    } else {
+        None
+    })
+    .fetch_one(&state.db_pool)
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                success: false,
+                message: format!("Delivery insert failed: {e}"),
+            }),
+        )
+    })?;
+
+    let service_type = crate::services::normalize_to_service_type(&service);
+    let agentic_style = if use_long_form_workflow {
+        long_form_style.to_string()
+    } else {
+        service_type.default_style().to_string()
+    };
+    let agentic_duration = if use_long_form_workflow {
+        target_duration
+    } else {
+        has_product_url.then(|| 15.0).unwrap_or(8.0)
+    };
+
+    let scraped_context = scraped_site
+        .map(|s| format!("\n\n## Scraped Website Content\n{}\n\nUse the above website content to understand the product and its value proposition.", s))
+        .unwrap_or_default();
+
+    let delivery_id_clone = delivery_id;
+    let workflow_id = crate::services::AgenticServicePipeline::start(
+        state.clone(),
+        service.clone(),
+        crate::services::ServiceInput {
+            title: format!("Revenue sample pack for {}", display_name),
+            brief: format!(
+                "{prompt}\n\nProspect description: {description}\n\nCreate a buyer-facing sample for this service: {service_offer}. It should be strong enough to send in an X DM or email, use the available public source/reference, include concise narration, and end with a clear CTA for the starter offer.{scraped_context}"
+            ),
+            source_url: if has_product_url { Some(source_url.clone()) } else { None },
+            style: agentic_style,
+            duration_seconds: agentic_duration,
+            delivery_id: delivery_id_clone,
+            prospect_id: Some(id),
+            session_uuid: None,
+            user_id: None,
+            source_table: Some("deliveries".to_string()),
+            source_record_id: Some(delivery_id),
+            idempotency_key: Some(format!("prospect-sample-agentic:{id}")),
+            reference_images: vec![],
+        nim_profile: None,
+        lane: "interactive".to_string(),
+        },
+    )
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                success: false,
+                message: format!("Failed to start agentic sample workflow: {e}"),
+            }),
+        )
+    })?;
+
+    let _ = sqlx::query("UPDATE deliveries SET workflow_id = $1 WHERE id = $2")
+        .bind(workflow_id)
+        .bind(delivery_id)
+        .execute(&state.db_pool)
+        .await;
+
+    let _ = sqlx::query(
+        "UPDATE prospects SET sample_delivery_id=$1, service_type=$2, updated_at=NOW() WHERE id=$3",
+    )
+    .bind(delivery_id)
+    .bind(&service)
+    .bind(id)
+    .execute(&state.db_pool)
+    .await;
+
+    let delivery_subdomain = if assigned_app == "studio" {
+        "studio"
+    } else {
+        app_subdomain_for_service(&service)
+    };
+    let delivery_url = format!(
+        "https://{}.videosync.ink/delivery/{}",
+        delivery_subdomain, delivery_id,
+    );
+    Ok(Json(json!({
+        "success": true,
+        "delivery_id": delivery_id.to_string(),
+        "delivery_url": delivery_url,
+        "service": service,
+        "message": "Revenue sample pack queued. The delivery link is shareable immediately and will update when rendering completes."
+    })))
+}
+
+async fn send_prospect_email_handler(
+    Extension(state): Extension<Arc<AppState>>,
+    Extension(claims): Extension<crate::models::auth::Claims>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
+    // Emails go out from support@videosync.ink. Admins may send to any prospect;
+    // whitelisted referral users may send only to their own sourced prospects.
+    let is_admin = claims.is_superuser || claims.is_staff;
+    if !is_admin {
+        // Whitelisted (non-admin) users must own the prospect (sourced_by).
+        let owned: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM prospects WHERE id = $1 AND sourced_by = $2)",
+        )
+        .bind(id)
+        .bind(claims.sub.parse::<i32>().unwrap_or(0))
+        .fetch_one(&state.db_pool)
+        .await
+        .unwrap_or(false);
+        if !owned {
+            return Err((
+                StatusCode::FORBIDDEN,
+                Json(ErrorResponse {
+                    success: false,
+                    message: "You can only send email to prospects you sourced.".to_string(),
+                }),
+            ));
+        }
+    }
+    let row = sqlx::query(
+        "SELECT display_name, business_email, email_script
+         FROM prospects WHERE id=$1",
+    )
+    .bind(id)
+    .fetch_optional(&state.db_pool)
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                success: false,
+                message: e.to_string(),
+            }),
+        )
+    })?
+    .ok_or_else(|| {
+        (
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                success: false,
+                message: "Prospect not found".to_string(),
+            }),
+        )
+    })?;
+
+    let display_name: String = row.get("display_name");
+    let email: Option<String> = row.get("business_email");
+    let email_script: Option<String> = row.get("email_script");
+
+    let to_email = match email {
+        Some(e) if !e.is_empty() => e,
+        _ => {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse {
+                    success: false,
+                    message: "Prospect has no business_email".to_string(),
+                }),
+            ));
+        }
+    };
+
+    let script = match email_script {
+        Some(s) if !s.is_empty() => s,
+        _ => {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse {
+                    success: false,
+                    message: "Prospect has no email_script — generate outreach first".to_string(),
+                }),
+            ));
+        }
+    };
+
+    match crate::services::email_service::send_prospect_email(
+        &state.db_pool,
+        &to_email,
+        &display_name,
+        &script,
+        id,
+    )
+    .await
+    {
+        Ok((message_id, log_id)) => {
+            let _ = sqlx::query(
+                "UPDATE prospects SET contact_status='contacted', updated_at=NOW() WHERE id=$1",
+            )
+            .bind(id)
+            .execute(&state.db_pool)
+            .await;
+
+            Ok(Json(json!({
+                "success": true,
+                "message_id": message_id,
+                "log_id": log_id,
+                "to": to_email,
+                "prospect_name": display_name,
+                "message": "Email sent via AWS SES. Prospect marked as contacted."
+            })))
+        }
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                success: false,
+                message: format!("Failed to send email: {e}"),
+            }),
+        )),
+    }
+}
+
+// ============================================================================
+// SSR HTML
+// ============================================================================
+
+const PROSPECT_FINDER_HTML: &str = r###"<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Prospect Finder — Admin</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<style>
+/* Deep-purple palette — matches content_machine Enterprise UI redesign */
+:root{
+  --bg:#2a2438;
+  --surface:#352f44;
+  --border:#5c5470;
+  --accent:#dbd8e3;
+  --accent-strong:#8a7ca8;
+  --purple:#7a4cff;
+  --muted:#b8b3c8;
+  --dim:#9999bb;
+  --success:#4ade80;
+  --warn:#facc15;
+  --danger:#f87171;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{
+  font-family:'Inter',system-ui,-apple-system,sans-serif;
+  background:linear-gradient(135deg,#2a2438 0%,#1f1a2a 100%);
+  color:var(--accent);
+  min-height:100vh;
+  font-weight:400;
+  letter-spacing:-0.01em;
+}
+
+.header{
+  background:rgba(53,47,68,0.6);
+  backdrop-filter:blur(18px);
+  -webkit-backdrop-filter:blur(18px);
+  border-bottom:1px solid rgba(92,84,112,0.4);
+  padding:16px 28px;
+  display:flex;align-items:center;gap:16px;
+  position:sticky;top:0;z-index:10;
+}
+.header h1{
+  font-size:1.2rem;font-weight:600;
+  background:linear-gradient(135deg,var(--accent) 0%,#fff 100%);
+  -webkit-background-clip:text;background-clip:text;
+  -webkit-text-fill-color:transparent;
+}
+.back{color:var(--dim);text-decoration:none;font-size:0.9rem;transition:color 0.15s}
+.back:hover{color:var(--accent)}
+.container{max-width:1280px;margin:0 auto;padding:28px}
+
+/* Cards — frosted glass look */
+.search-card{
+  background:rgba(53,47,68,0.7);
+  backdrop-filter:blur(14px);
+  -webkit-backdrop-filter:blur(14px);
+  border:1px solid rgba(92,84,112,0.5);
+  border-radius:14px;
+  padding:24px;
+  margin-bottom:20px;
+  box-shadow:0 4px 24px rgba(0,0,0,0.25);
+}
+.search-card h2{font-size:1rem;font-weight:600;color:var(--accent);margin-bottom:16px}
+.search-card h2 + p{color:var(--muted);font-size:0.85rem;margin-bottom:16px;margin-top:-8px;line-height:1.5}
+
+.form-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:14px;margin-bottom:16px}
+label{font-size:0.75rem;font-weight:500;color:var(--dim);display:block;margin-bottom:6px;text-transform:uppercase;letter-spacing:0.04em}
+select,input{
+  width:100%;padding:10px 14px;
+  background:rgba(42,36,56,0.6);
+  border:1px solid rgba(92,84,112,0.6);
+  border-radius:8px;
+  color:var(--accent);
+  font-size:0.9rem;
+  font-family:inherit;
+  transition:border-color 0.15s, background 0.15s;
+}
+select:focus,input:focus{outline:none;border-color:var(--purple);background:rgba(42,36,56,0.9)}
+
+/* Buttons */
+.btn{
+  padding:10px 20px;border:none;border-radius:8px;cursor:pointer;
+  font-size:0.9rem;font-weight:600;font-family:inherit;
+  transition:background 0.15s, transform 0.1s;
+  letter-spacing:-0.01em;
+}
+.btn:active{transform:translateY(1px)}
+.btn-primary{background:var(--purple);color:#fff}
+.btn-primary:hover{background:#6a3def}
+.btn-sm{padding:6px 12px;font-size:0.78rem;border-radius:6px}
+.btn-copy{background:rgba(92,84,112,0.3);color:var(--accent);border:1px solid rgba(92,84,112,0.5)}
+.btn-copy:hover{background:rgba(92,84,112,0.5)}
+.btn-ghost{background:transparent;color:var(--dim);border:1px solid rgba(92,84,112,0.5)}
+.btn-ghost:hover{color:var(--accent);border-color:var(--border)}
+
+/* Tabs */
+.tabs{display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap}
+.tab{
+  padding:8px 16px;border-radius:8px;cursor:pointer;
+  font-size:0.85rem;font-weight:500;
+  background:rgba(42,36,56,0.5);color:var(--dim);
+  border:1px solid rgba(92,84,112,0.3);
+  transition:all 0.15s;
+}
+.tab:hover{color:var(--accent);border-color:rgba(92,84,112,0.6)}
+.tab.active{background:var(--purple);color:#fff;border-color:var(--purple)}
+
+/* Table */
+.table-wrap{
+  background:rgba(53,47,68,0.7);
+  backdrop-filter:blur(14px);
+  border:1px solid rgba(92,84,112,0.5);
+  border-radius:14px;
+  overflow:hidden;
+  box-shadow:0 4px 24px rgba(0,0,0,0.25);
+}
+table{width:100%;border-collapse:collapse;font-size:0.88rem}
+th{
+  text-align:left;padding:14px 16px;
+  color:var(--dim);font-weight:500;font-size:0.75rem;
+  text-transform:uppercase;letter-spacing:0.05em;
+  border-bottom:1px solid rgba(92,84,112,0.4);
+  background:rgba(42,36,56,0.4);
+}
+td{
+  padding:14px 16px;
+  border-bottom:1px solid rgba(92,84,112,0.2);
+  vertical-align:top;
+  color:var(--accent);
+}
+tr:last-child td{border-bottom:none}
+tr:hover td{background:rgba(92,84,112,0.12)}
+
+/* Score + status badges */
+.score-badge{display:inline-block;padding:3px 10px;border-radius:12px;font-size:0.75rem;font-weight:700}
+.score-high{background:rgba(74,222,128,0.15);color:var(--success);border:1px solid rgba(74,222,128,0.3)}
+.score-mid{background:rgba(250,204,21,0.15);color:var(--warn);border:1px solid rgba(250,204,21,0.3)}
+.score-low{background:rgba(248,113,113,0.15);color:var(--danger);border:1px solid rgba(248,113,113,0.3)}
+.status-select{
+  background:rgba(42,36,56,0.6);border:1px solid rgba(92,84,112,0.5);
+  color:var(--accent);padding:4px 8px;border-radius:6px;
+  font-size:0.78rem;font-family:inherit;cursor:pointer;
+}
+
+/* Platform chips */
+.platform-yt{color:#ff4d4d;font-weight:600;font-size:0.82rem}
+.platform-tw{color:#9147ff;font-weight:600;font-size:0.82rem}
+
+/* DM preview */
+.dm-text{
+  background:rgba(42,36,56,0.7);
+  border:1px solid rgba(92,84,112,0.4);
+  border-radius:8px;
+  padding:12px;
+  font-size:0.82rem;
+  color:var(--muted);
+  white-space:pre-wrap;
+  max-height:100px;overflow-y:auto;
+  margin-bottom:6px;
+  line-height:1.5;
+}
+
+/* States */
+.loading,.empty{
+  text-align:center;padding:48px 24px;
+  color:var(--dim);
+}
+.empty-icon{font-size:3rem;opacity:0.5;margin-bottom:12px;display:block}
+.empty-hint{font-size:0.85rem;margin-top:8px;color:var(--dim)}
+
+/* Messages */
+.msg{padding:12px 18px;border-radius:10px;margin-bottom:14px;font-size:0.9rem;font-weight:500}
+.msg-success{background:rgba(74,222,128,0.12);color:var(--success);border:1px solid rgba(74,222,128,0.3)}
+.msg-error{background:rgba(248,113,113,0.12);color:var(--danger);border:1px solid rgba(248,113,113,0.3)}
+
+/* Notes input */
+.row-notes{
+  width:100%;padding:6px 10px;
+  background:rgba(42,36,56,0.5);
+  border:1px solid rgba(92,84,112,0.3);
+  border-radius:6px;
+  color:var(--accent);
+  font-size:0.78rem;font-family:inherit;
+  margin-top:6px;
+  transition:border-color 0.15s;
+}
+.row-notes:focus{outline:none;border-color:var(--purple)}
+
+.contact-stack,.action-stack{
+  display:flex;
+  flex-direction:column;
+  gap:8px;
+}
+.contact-pill{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:8px;
+  padding:6px 8px;
+  background:rgba(42,36,56,0.45);
+  border:1px solid rgba(92,84,112,0.35);
+  border-radius:8px;
+}
+.contact-pill a{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.action-help{color:var(--dim);font-size:0.72rem;line-height:1.35;max-width:150px}
+.action-stack .btn{
+  width:100%;
+  display:flex;
+  justify-content:center;
+  align-items:center;
+  text-decoration:none;
+  white-space:nowrap;
+}
+.action-primary{background:rgba(122,76,255,0.25);color:#fff;border:1px solid rgba(122,76,255,0.55)}
+.action-success{background:rgba(74,222,128,0.13);color:var(--success);border:1px solid rgba(74,222,128,0.35)}
+.action-danger{background:rgba(248,113,113,0.14)!important;color:var(--danger)!important;border:1px solid rgba(248,113,113,0.35)!important}
+
+/* Stats strip */
+.stat-strip{
+  display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));
+  gap:12px;margin-bottom:20px;
+}
+.stat-card{
+  background:rgba(53,47,68,0.6);
+  border:1px solid rgba(92,84,112,0.3);
+  border-radius:10px;
+  padding:14px 16px;
+}
+.stat-val{font-size:1.4rem;font-weight:700;color:var(--accent)}
+.stat-label{font-size:0.72rem;text-transform:uppercase;color:var(--dim);letter-spacing:0.05em;margin-top:2px}
+
+/* Progress bar */
+.pbar-track{background:rgba(42,36,56,0.8);border-radius:4px;height:8px;overflow:hidden}
+.pbar-fill{background:linear-gradient(90deg,var(--purple),var(--accent-strong));height:100%;width:0%;transition:width 0.5s}
+
+/* Scrollbar */
+::-webkit-scrollbar{width:8px;height:8px}
+::-webkit-scrollbar-track{background:rgba(42,36,56,0.3)}
+::-webkit-scrollbar-thumb{background:rgba(92,84,112,0.5);border-radius:4px}
+::-webkit-scrollbar-thumb:hover{background:rgba(92,84,112,0.8)}
+
+/* PB job list */
+.pb-job-row{
+  display:grid;
+  grid-template-columns:minmax(0,1fr) auto auto auto;
+  gap:12px;
+  align-items:center;
+  padding:12px 14px;
+  background:rgba(42,36,56,0.5);
+  border:1px solid rgba(92,84,112,0.3);
+  border-radius:10px;
+  margin-bottom:8px;
+}
+.pb-job-url{font-size:0.82rem;color:var(--accent);font-family:'JetBrains Mono',monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pb-job-status{font-size:0.72rem;font-weight:600;text-transform:uppercase;letter-spacing:0.04em;padding:3px 10px;border-radius:10px}
+.pb-job-status.running   {background:rgba(74,222,128,0.15);color:var(--success)}
+.pb-job-status.queued    {background:rgba(250,204,21,0.15);color:var(--warn)}
+.pb-job-status.completed {background:rgba(138,124,168,0.2); color:var(--accent)}
+.pb-job-status.failed    {background:rgba(248,113,113,0.15);color:var(--danger)}
+
+/* Action row (buttons + status) so the top search bar aligns properly */
+.action-row{
+  display:flex;align-items:center;gap:12px;flex-wrap:wrap;
+  padding-top:4px;
+}
+
+/* Mobile / tablet */
+@media (max-width: 900px){
+  .container{padding:18px}
+  .form-grid{grid-template-columns:1fr 1fr}
+  .tabs{gap:6px}
+  .tab{padding:7px 12px;font-size:0.8rem}
+  .stat-strip{grid-template-columns:repeat(2,1fr)}
+  .pb-job-row{grid-template-columns:1fr auto;gap:8px}
+  .pb-job-url{grid-column:1 / -1}
+  /* Horizontal-scroll table instead of squish */
+  .table-wrap{overflow-x:auto}
+  table{min-width:720px}
+}
+@media (max-width: 560px){
+  .header{padding:14px 16px}
+  .container{padding:14px}
+  .form-grid{grid-template-columns:1fr}
+  .btn{width:100%}
+  .action-row .btn{width:auto}
+  .action-row{flex-direction:column;align-items:stretch}
+  .search-card{padding:18px}
+  .stat-strip{grid-template-columns:1fr 1fr}
+}
+</style>
+</head>
+<body>
+<div class="header">
+  <a href="/admin" class="back">← Admin</a>
+  <h1>🎯 Prospect Finder</h1>
+</div>
+<div class="container">
+  <div id="msg"></div>
+
+  <!-- Source Selector Tabs -->
+  <div class="tabs" style="margin-bottom:14px">
+    <div class="tab active" onclick="showSource('yt-tw',this)">▶ YouTube / Twitch</div>
+    <div class="tab" onclick="showSource('linkedin',this)">💼 LinkedIn</div>
+    <div class="tab" onclick="showSource('telegram',this)">✈️ Telegram Opportunities</div>
+    <div class="tab" onclick="showSource('jobs',this)">🚦 PB Job Status</div>
+    <div class="tab" onclick="showSource('instagram',this)">📸 Instagram</div>
+    <div class="tab" onclick="showSource('ph',this)">🚀 Product Hunt</div>
+  </div>
+
+  <!-- YouTube / Twitch Search -->
+  <div id="src-yt-tw" class="search-card">
+    <h2>Find Prospects on YouTube &amp; Twitch</h2>
+    <p>AI discovers creators, scores each 0–100 against your ICP, auto-generates cold DM scripts.</p>
+    <div class="form-grid">
+      <div>
+        <label>Platform</label>
+        <select id="platform">
+          <option value="youtube">YouTube</option>
+          <option value="twitch">Twitch (big creators)</option>
+          <option value="twitch_clipper">🎯 Twitch Clipper (Top Streamers → YouTube)</option>
+          <option value="kick_clipper">🎯 Kick Clipper (via YouTube)</option>
+          <option value="kick_clipper_top">🎯 Kick Clipper (Top Streamers → YouTube)</option>
+        </select>
+      </div>
+      <div>
+        <label>Service scope (optional)</label>
+        <select id="service">
+          <option value="">AI picks (all ON services)</option>
+          <option value="twitch_clipping">💜 Twitch Clipping</option>
+          <option value="kick_auto_clipper">⚡ Kick Auto-Clipper</option>
+          <option value="youtube_clipping">📺 YouTube Clipping</option>
+        </select>
+      </div>
+      <div>
+        <label>Prospect Type</label>
+        <select id="prospect_type">
+          <option value="content_creator">Content Creator</option>
+          <option value="creator_manager">Creator Manager / Agency</option>
+          <option value="podcaster">Podcaster</option>
+          <option value="educator">Educator / STEM</option>
+          <option value="business_owner">Business / Brand</option>
+          <option value="clipper">Clipper / Editor</option>
+        </select>
+      </div>
+      <div>
+        <label>Category / Game</label>
+        <input id="category" placeholder="gaming, tech, cooking…" value="gaming">
+      </div>
+      <div>
+        <label>Min Viewers/Subscribers</label>
+        <input id="min_viewers" type="number" placeholder="500" value="500">
+      </div>
+      <div>
+        <label>Max Viewers/Subscribers</label>
+        <input id="max_viewers" type="number" placeholder="50000" value="50000">
+      </div>
+      <div>
+        <label>Results Limit</label>
+        <input id="limit" type="number" value="20" min="5" max="50">
+      </div>
+    </div>
+    <button class="btn btn-primary" onclick="runSearch()">🔍 Find &amp; Score Prospects</button>
+    <button class="btn btn-copy" style="margin-left:8px" onclick="runHunt()" title="Fire a hunt and auto-distribute results across the team (sourced_by never NULL)">🎯 Hunt &amp; Distribute</button>
+    <button class="btn btn-copy" style="margin-left:8px" onclick="runRedistribute()" title="Round-robin all unowned prospects across the team">🔀 Redistribute Unowned</button>
+    <span id="search-status" style="margin-left:12px;color:var(--dim);font-size:0.85rem"></span>
+  </div>
+
+  <!-- LinkedIn Search -->
+  <div id="src-linkedin" class="search-card" style="display:none">
+    <h2>Find Prospects on LinkedIn (Sales Navigator)</h2>
+    <p>Describe your ideal client in plain English. AI turns the description into a Sales Navigator filter set (title + industry + company size + geography + seniority) and launches a PhantomBuster scrape. Requires a LinkedIn account with an active Sales Navigator subscription.</p>
+    <div class="form-grid">
+      <div style="grid-column:1 / -1">
+        <label>Describe your ideal client</label>
+        <input id="li-description" placeholder="podcasters with 10k–100k monthly downloads who need video editors" value="podcasters with 10k-100k downloads needing video editors">
+      </div>
+      <div>
+        <label>Max Profiles</label>
+        <input id="li-max-profiles" type="number" value="25" min="10" max="2500">
+      </div>
+    </div>
+    <button class="btn btn-primary" onclick="runLinkedInSearch()">💼 Launch LinkedIn Scrape</button>
+    <button class="btn btn-ghost" onclick="listLinkedInAgents()" style="margin-left:8px">List PB Agents</button>
+    <span id="li-status" style="margin-left:12px;color:var(--dim);font-size:0.85rem"></span>
+    <div id="li-agents" style="margin-top:14px"></div>
+  </div>
+
+  <!-- Telegram Opportunities -->
+  <div id="src-telegram" class="search-card" style="display:none">
+    <h2>Telegram Opportunities</h2>
+    <p>AI-watched Telegram channels for paid-gig opportunities. Once you log in with your phone below, the MTProto watcher polls configured channels and pings <code>@videosync_sales_bot</code> with a pre-written custom DM every time it finds a match. You can also paste messages manually. Watched channels: <code id="tg-watched"></code></p>
+
+    <!-- MTProto login panel -->
+    <div id="tg-login" style="margin-bottom:16px;padding:16px;background:rgba(42,36,56,0.6);border:1px solid rgba(122,76,255,0.3);border-radius:10px">
+      <div id="tg-status-summary" style="font-size:0.9rem;color:var(--muted);margin-bottom:10px">Checking Telegram watcher status…</div>
+
+      <div id="tg-login-start" style="display:none">
+        <div class="form-grid">
+          <div>
+            <label>Your Telegram phone (with country code)</label>
+            <input id="tg-phone" placeholder="+14155551234">
+          </div>
+        </div>
+        <button class="btn btn-primary" onclick="tgLoginStart()">Send code to Telegram</button>
+        <span id="tg-login-status" style="margin-left:12px;color:var(--dim);font-size:0.85rem"></span>
+      </div>
+
+      <div id="tg-login-verify" style="display:none">
+        <div class="form-grid">
+          <div>
+            <label>Phone (same as before)</label>
+            <input id="tg-phone-v" placeholder="+14155551234">
+          </div>
+          <div>
+            <label>Code Telegram sent you</label>
+            <input id="tg-code" placeholder="12345" inputmode="numeric">
+          </div>
+        </div>
+        <button class="btn btn-primary" onclick="tgLoginVerify()">Verify &amp; Authorise Watcher</button>
+        <span id="tg-verify-status" style="margin-left:12px;color:var(--dim);font-size:0.85rem"></span>
+      </div>
+
+      <div id="tg-login-active" style="display:none">
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+          <span class="score-badge score-high">✓ Watcher active</span>
+          <span id="tg-active-phone" style="color:var(--dim);font-size:0.85rem"></span>
+          <span id="tg-last-poll" style="color:var(--dim);font-size:0.85rem"></span>
+        </div>
+      </div>
+    </div>
+
+    <details style="margin-bottom:16px">
+      <summary style="cursor:pointer;color:var(--dim);font-size:0.85rem">📋 Paste a new opportunity</summary>
+      <div style="margin-top:12px;padding:14px;background:rgba(42,36,56,0.4);border-radius:8px">
+        <div class="form-grid">
+          <div>
+            <label>Channel (without @)</label>
+            <input id="tg-channel" placeholder="cryptojobslist" value="cryptojobslist">
+          </div>
+          <div>
+            <label>Sender (optional)</label>
+            <input id="tg-sender" placeholder="@username">
+          </div>
+          <div style="grid-column: 1 / -1">
+            <label>Message text</label>
+            <textarea id="tg-message" rows="4" style="width:100%;padding:8px 12px;background:rgba(42,36,56,0.6);border:1px solid rgba(92,84,112,0.5);border-radius:8px;color:var(--accent);font-family:inherit;font-size:0.9rem" placeholder="Paste the Telegram message here..."></textarea>
+          </div>
+          <div style="grid-column: 1 / -1">
+            <label>Link to message (optional)</label>
+            <input id="tg-link" placeholder="https://t.me/cryptojobslist/12345">
+          </div>
+        </div>
+        <button class="btn btn-primary" onclick="submitTelegramOpportunity()">Score &amp; Save Opportunity</button>
+        <span id="tg-submit-status" style="margin-left:12px;color:var(--dim);font-size:0.85rem"></span>
+      </div>
+    </details>
+
+    <div style="display:flex;gap:8px;align-items:center;margin-bottom:12px;flex-wrap:wrap">
+      <button class="btn btn-ghost btn-sm" onclick="loadTgOpportunities('')">All</button>
+      <button class="btn btn-ghost btn-sm" onclick="loadTgOpportunities('new')">New</button>
+      <button class="btn btn-ghost btn-sm" onclick="loadTgOpportunities('contacted')">Contacted</button>
+      <button class="btn btn-ghost btn-sm" onclick="loadTgOpportunities('won')">Won</button>
+      <button class="btn btn-ghost btn-sm" onclick="loadTgOpportunities('ignored')">Ignored</button>
+    </div>
+    <div id="tg-opportunities-list">Loading...</div>
+  </div>
+
+  <!-- PB Jobs Status -->
+  <div id="src-jobs" class="search-card" style="display:none">
+    <h2>PhantomBuster Job Status</h2>
+    <p>Live view of all LinkedIn + Instagram PB jobs. Click a completed LinkedIn job to import its leads into the Prospects tab.</p>
+    <button class="btn btn-ghost btn-sm" onclick="loadPbJobs()">↻ Refresh</button>
+    <div id="pb-jobs-list" style="margin-top:14px"></div>
+  </div>
+
+  <!-- Instagram Kick Clipper -->
+  <div id="src-instagram" class="search-card" style="display:none">
+    <h2>Find Kick Clipper Channels on Instagram</h2>
+    <p>AI picks Kick-specific hashtags (e.g. #kickclips, #kickstreamer, #kickhighlights) to find Instagram accounts that repost Kick.com streamer clips. Results are scored and Kick creators are auto-detected from captions.</p>
+    <div class="form-grid">
+      <div>
+        <label>Kick Category / Niche</label>
+        <input id="ig-kick-category" placeholder="gaming, just chatting, sports..." value="gaming">
+      </div>
+      <div>
+        <label>Max Posts per Hashtag</label>
+        <input id="ig-kick-posts" type="number" value="30" min="10" max="100">
+      </div>
+      <div>
+        <label>Number of Hashtags</label>
+        <input id="ig-kick-hashtags" type="number" value="3" min="1" max="6">
+      </div>
+    </div>
+    <button class="btn btn-primary" onclick="runKickInstagramSearch()">🔍 Find Kick Clipper Channels</button>
+    <span id="ig-kick-status" style="margin-left:12px;color:var(--dim);font-size:0.85rem"></span>
+  </div>
+
+  <!-- View Switcher -->
+  <div class="action-row" style="margin-bottom:16px">
+    <button class="btn btn-primary" id="btn-prospects" onclick="showView('prospects')">📋 Prospects</button>
+    <button class="btn btn-ghost" id="btn-contacts" onclick="showView('contacts')">📇 Contact Queue</button>
+    <button class="btn btn-ghost" id="btn-clipgen" onclick="showView('clipgen')">🎬 Clip Generator</button>
+  </div>
+
+  <!-- PROSPECTS VIEW -->
+  <div id="view-prospects">
+    <div class="stat-strip" id="prospect-contact-summary"></div>
+    <div style="margin:10px 0;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+      <button class="btn btn-primary" onclick="bulkSendEmails()">📧 Bulk Send Emails (new, with outreach)</button>
+      <span id="bulk-send-status" style="color:#a8b8d3;font-size:0.85rem"></span>
+    </div>
+    <!-- Filter Tabs -->
+    <div class="tabs">
+      <div class="tab active" onclick="setFilter('all',this)">All</div>
+      <div class="tab" onclick="setFilter('new',this)">New</div>
+      <div class="tab" onclick="setFilter('contacted',this)">Contacted</div>
+      <div class="tab" onclick="setFilter('replied',this)">Replied</div>
+      <div class="tab" onclick="setFilter('converted',this)">Converted</div>
+      <label class="tab" style="cursor:pointer"><input type="checkbox" checked onchange="toggleFresh(this)" style="margin-right:6px">New only (14d)</label>
+    </div>
+    <div class="table-wrap">
+      <div id="table-area"><div class="loading">Loading prospects…</div></div>
+    </div>
+  </div>
+
+  <!-- CONTACT QUEUE VIEW -->
+  <div id="view-contacts" style="display:none">
+    <div class="search-card">
+      <h2>📇 Outreach Contact Queue</h2>
+      <p>Revenue-first queue sorted by public contact quality and AI fit. Prioritize X + email leads, then email-only, then X-only. Leads without contact data stay visible so enrichment gaps are obvious.</p>
+      <div id="contact-queue-area"><div class="loading">Loading contacts…</div></div>
+    </div>
+  </div>
+
+  <!-- CLIP GENERATOR VIEW -->
+  <div id="view-clipgen" style="display:none">
+    <div class="search-card">
+      <h2>🎬 Generate Demo Clips for a Prospect</h2>
+      <div class="form-grid" style="margin-bottom:12px">
+        <div style="grid-column:1/-1">
+          <label>Select Prospect</label>
+          <select id="cg-prospect" onchange="onProspectSelect(this)">
+            <option value="">— select a prospect —</option>
+          </select>
+        </div>
+        <div style="grid-column:1/-1">
+          <label>Video URL (auto-filled from prospect)</label>
+          <input id="cg-url" placeholder="https://youtube.com/watch?v=...">
+        </div>
+        <div>
+          <label>Number of Clips</label>
+          <input id="cg-clips" type="number" value="3" min="1" max="10">
+        </div>
+        <div>
+          <label>Min Duration (seconds)</label>
+          <input id="cg-min-dur" type="number" value="30" min="15" max="120">
+        </div>
+        <div>
+          <label>Max Duration (seconds)</label>
+          <input id="cg-max-dur" type="number" value="90" min="30" max="180">
+        </div>
+      </div>
+      <button class="btn btn-primary" onclick="startClipJob()">🎬 Generate Demo Clips</button>
+      <span id="cg-status" style="margin-left:12px;color:#9ca3af;font-size:0.85rem"></span>
+    </div>
+
+    <!-- Progress -->
+    <div id="cg-progress" class="search-card" style="display:none">
+      <div style="color:var(--accent);margin-bottom:10px;font-size:0.9rem" id="cg-progress-label">Analyzing…</div>
+      <div class="pbar-track"><div id="cg-progress-bar" class="pbar-fill"></div></div>
+    </div>
+
+    <!-- Results -->
+    <div id="cg-results" class="search-card" style="display:none">
+      <h2>Generated Clips</h2>
+      <div id="cg-clips-list"></div>
+      <button class="btn btn-primary" style="margin-top:16px" onclick="createDelivery()">📦 Create Delivery Package</button>
+    </div>
+
+    <!-- Delivery + Outreach -->
+    <div id="cg-delivery" class="search-card" style="display:none">
+      <h2>Delivery Link</h2>
+      <div style="display:flex;gap:8px;align-items:center;margin-bottom:16px;flex-wrap:wrap">
+        <input id="cg-delivery-url" readonly style="flex:1;min-width:240px">
+        <button class="btn btn-sm btn-copy" onclick="copyEl('cg-delivery-url')">📋 Copy</button>
+      </div>
+      <button class="btn btn-primary" onclick="generateOutreach()">🤖 Generate AI Outreach Message</button>
+      <div id="cg-outreach" style="display:none;margin-top:16px">
+        <div class="dm-text" id="cg-outreach-text" style="max-height:none;margin-bottom:8px"></div>
+        <button class="btn btn-sm btn-copy" onclick="copyEl('cg-outreach-text')">📋 Copy Message</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+  <!-- Product Hunt Prospects -->
+  <div id="src-ph" class="search-card" style="display:none">
+    <h2>Find Prospects on Product Hunt</h2>
+    <p>Fetches trending SaaS products, enriches contact info, scores fit 0–100 (AI), and saves them as landing_page prospects ready for outreach.</p>
+    <div class="form-grid">
+      <div>
+        <label>Topic</label>
+        <select id="ph-topic">
+          <option value="saas">SaaS</option>
+          <option value="developer-tools">Developer Tools</option>
+          <option value="productivity">Productivity</option>
+          <option value="design-tools">Design Tools</option>
+          <option value="marketing">Marketing</option>
+          <option value="analytics">Analytics</option>
+          <option value="automation">Automation</option>
+          <option value="no-code">No-Code</option>
+          <option value="artificial-intelligence">AI</option>
+        </select>
+      </div>
+      <div>
+        <label>Limit</label>
+        <input id="ph-limit" type="number" value="10" min="1" max="50">
+      </div>
+      <div>
+        <label>Sort</label>
+        <select id="ph-order">
+          <option value="NEWEST">Newest</option>
+          <option value="VOTES">Most votes</option>
+          <option value="FEATURED">Featured</option>
+        </select>
+      </div>
+    </div>
+    <button class="btn btn-primary" onclick="runProductHuntSearch()">🚀 Fetch &amp; Enrich Prospects</button>
+    <span id="ph-status" style="margin-left:12px;color:var(--dim);font-size:0.85rem"></span>
+    <div id="ph-results" style="margin-top:16px"></div>
+  </div>
+
+  <script>
+const token = localStorage.getItem('auth_token') || localStorage.getItem('admin_token') || localStorage.getItem('authToken');
+if (!token) window.location.href = '/admin';
+
+let currentFilter = 'all';
+
+function showMsg(text, ok=true){
+  const el = document.getElementById('msg');
+  el.innerHTML = `<div class="msg ${ok?'msg-success':'msg-error'}">${text}</div>`;
+  setTimeout(()=>el.innerHTML='', 4000);
+}
+
+// ── Source-card switcher (YouTube/Twitch vs LinkedIn vs PB Jobs) ──────────
+function showSource(name, btn){
+  document.querySelectorAll('.tabs > .tab').forEach(t=>t.classList.remove('active'));
+  btn.classList.add('active');
+  ['yt-tw','linkedin','telegram','jobs','instagram','ph'].forEach(s=>{
+    const el = document.getElementById('src-'+s);
+    if(el) el.style.display = (s===name)?'block':'none';
+  });
+  if (name === 'jobs')     loadPbJobs();
+  if (name === 'telegram') { loadTelegramStatus(); loadTelegramChannels(); loadTgOpportunities(''); }
+}
+
+// ── Product Hunt ──────────────────────────────────────────────────────────
+async function runProductHuntSearch(){
+  const status = document.getElementById('ph-status');
+  const out = document.getElementById('ph-results');
+  const topic = document.getElementById('ph-topic').value;
+  const limit = parseInt(document.getElementById('ph-limit').value || '10', 10) || 10;
+  const order = document.getElementById('ph-order').value;
+  status.textContent = 'Fetching + enriching…';
+  out.innerHTML = '<div class="loading">Contacting Product Hunt…</div>';
+  try{
+    const res = await fetch('/api/admin/prospects/product-hunt/search',{
+      method:'POST',
+      headers:{'Content-Type':'application/json','Authorization':'Bearer '+(localStorage.getItem('auth_token')||localStorage.getItem('authToken')||'')},
+      body: JSON.stringify({topic:topic, limit:limit, order:order, save:true})
+    });
+    const data = await res.json();
+    if(!data.success){ throw new Error(data.error || 'search failed'); }
+    status.textContent = data.message || ('Found ' + (data.results||[]).length);
+    const rows = (data.results||[]);
+    if(rows.length === 0){ out.innerHTML = '<div class="loading">No products found for this topic.</div>'; return; }
+    let html = '<table style="width:100%;border-collapse:collapse;font-size:0.85rem"><tbody>';
+    rows.forEach(r=>{
+      html += '<tr style="border-bottom:1px solid rgba(148,163,184,0.14)">';
+      html += '<td style="padding:8px"><b>' + (r.name||'') + '</b><br><span style="color:#94a3b8">' + ((r.tagline||'').slice(0,120)) + '</span></td>';
+      html += '<td style="padding:8px;width:70px">' + (r.votes!=null? r.votes : '') + ' votes</td>';
+      html += '<td style="padding:8px;width:80px">score ' + (r.ai_score!=null? r.ai_score : '—') + '</td>';
+      html += '<td style="padding:8px;width:180px">' + ((r.website||'').replace('https://','')) + '<br>' + (r.business_email ? '<span style="color:#34d399">' + r.business_email + '</span>' : '<span style="color:#64748b">no email found</span>') + '</td>';
+      html += '<td style="padding:8px;width:90px">' + (r.service_type||'') + '</td>';
+      html += '</tr>';
+    });
+    html += '</tbody></table>';
+    out.innerHTML = html;
+  }catch(e){
+    status.textContent = '';
+    out.innerHTML = '<div style="color:#fb7185">Product Hunt search failed: ' + (e.message||e) + '</div>';
+  }
+}
+
+// ── LinkedIn ──────────────────────────────────────────────────────────────
+async function listLinkedInAgents(){
+  const out = document.getElementById('li-agents');
+  out.innerHTML = '<div class="loading">Loading PB agents…</div>';
+  try{
+    const res = await fetch('/api/admin/prospects/linkedin/agents', {headers:{'Authorization':'Bearer '+token}});
+    const data = await res.json();
+    if(!data.success){ out.innerHTML = `<div class="msg msg-error">${data.error||'Failed'}</div>`; return; }
+    const agents = data.agents||[];
+    if(!agents.length){ out.innerHTML = '<div class="empty"><span class="empty-icon">🪐</span>No PB agents found.<div class="empty-hint">Add a Sales Navigator phantom in your PhantomBuster account.</div></div>'; return; }
+    out.innerHTML = '<div style="font-size:0.85rem;color:var(--muted);margin-bottom:6px">PB workspace agents:</div>' +
+      agents.map(a=>`<div class="pb-job-row"><span class="pb-job-url">${a.name}</span><span class="pb-job-status completed">${a.id}</span><span></span><span></span></div>`).join('');
+  }catch(e){ out.innerHTML = `<div class="msg msg-error">${e}</div>`; }
+}
+
+async function runLinkedInSearch(){
+  const desc = document.getElementById('li-description').value.trim();
+  const max  = parseInt(document.getElementById('li-max-profiles').value)||25;
+  if(!desc){ showMsg('Describe your ideal client first.', false); return; }
+
+  const status = document.getElementById('li-status');
+  status.textContent = '⏳ Building Sales Navigator filters via AI + launching PB…';
+  try{
+    const res = await fetch('/api/admin/prospects/linkedin/search', {
+      method:'POST',
+      headers:{'Authorization':'Bearer '+token,'Content-Type':'application/json'},
+      body: JSON.stringify({description: desc, max_profiles: max})
+    });
+    const data = await res.json();
+    if(!data.success){
+      status.textContent = '';
+      showMsg(data.error||data.message||'Launch failed', false);
+      return;
+    }
+    status.textContent = `✓ Launched job ${data.job_id?.slice(0,8)} — agent: ${data.agent_name||'?'}`;
+    showMsg(`LinkedIn scrape launched. Check "PB Job Status" tab in ~3-5 min, then click "Import leads" to bring them into the Prospects list.`);
+  }catch(e){
+    status.textContent = '';
+    showMsg(`Network error: ${e}`, false);
+  }
+}
+
+// ── PB Jobs ───────────────────────────────────────────────────────────────
+async function loadPbJobs(){
+  const out = document.getElementById('pb-jobs-list');
+  out.innerHTML = '<div class="loading">Loading PB jobs…</div>';
+  try{
+    const res = await fetch('/api/admin/prospects/linkedin/jobs', {headers:{'Authorization':'Bearer '+token}});
+    const data = await res.json();
+    if(!data.success){ out.innerHTML = `<div class="msg msg-error">${data.error||'Failed'}</div>`; return; }
+    const jobs = data.jobs||[];
+    if(!jobs.length){ out.innerHTML = '<div class="empty"><span class="empty-icon">🚦</span>No PB jobs yet.<div class="empty-hint">Run a LinkedIn or Instagram search above.</div></div>'; return; }
+    out.innerHTML = jobs.map(j=>{
+      const isLinkedIn = (j.search_url||'').includes('linkedin.com');
+      const importBtn = (isLinkedIn && j.status==='completed')
+        ? `<button class="btn btn-sm btn-primary" onclick="importLinkedInJob('${j.id}')">⬇ Import leads</button>`
+        : '<span></span>';
+      const url = (j.search_url||'').slice(0,80);
+      const launched = j.launched_at ? new Date(j.launched_at).toLocaleString() : '—';
+      return `<div class="pb-job-row" title="${j.error||''}">
+        <span class="pb-job-url">${url}</span>
+        <span class="pb-job-status ${j.status}">${j.status}</span>
+        <span style="font-size:0.78rem;color:var(--dim)">${launched}</span>
+        ${importBtn}
+      </div>`;
+    }).join('');
+  }catch(e){ out.innerHTML = `<div class="msg msg-error">${e}</div>`; }
+}
+
+async function importLinkedInJob(jobId){
+  showMsg('Importing leads from PhantomBuster…');
+  try{
+    const res = await fetch(`/api/admin/prospects/linkedin/jobs/${jobId}/results`, {headers:{'Authorization':'Bearer '+token}});
+    const data = await res.json();
+    if(!data.success){ showMsg(data.error||data.message||'Import failed', false); return; }
+    showMsg(`Imported ${data.imported_to_prospects||0} leads. Check the Prospects tab.`);
+    setTimeout(loadProspects, 800);
+    setTimeout(loadPbJobs, 800);
+  }catch(e){ showMsg(`Network error: ${e}`, false); }
+}
+
+// ── Telegram Opportunities ─────────────────────────────────────────────────
+
+async function loadTelegramStatus(){
+  try {
+    const r = await fetch('/api/admin/telegram/status', {headers:{'Authorization':'Bearer '+token}});
+    const data = await r.json();
+    const summary = document.getElementById('tg-status-summary');
+    const start   = document.getElementById('tg-login-start');
+    const verify  = document.getElementById('tg-login-verify');
+    const active  = document.getElementById('tg-login-active');
+    start.style.display = 'none';
+    verify.style.display = 'none';
+    active.style.display = 'none';
+    if (data.authorized) {
+      summary.innerHTML = '<b style="color:var(--success)">✓ MTProto watcher active</b> — configured channels are being monitored automatically.';
+      active.style.display = '';
+      document.getElementById('tg-active-phone').textContent = data.phone ? 'Phone: ' + data.phone : '';
+      document.getElementById('tg-last-poll').textContent = data.last_poll_at ? 'Last update: ' + new Date(data.last_poll_at).toLocaleString() : 'Waiting for first update…';
+    } else {
+      summary.innerHTML = 'Watcher not authorised yet. Enter your phone below — Telegram will send you a code via SMS or in-app notification. <b>One-time setup.</b>';
+      start.style.display = '';
+    }
+  } catch (e) {
+    document.getElementById('tg-status-summary').textContent = 'Status check failed: ' + e;
+  }
+}
+
+async function tgLoginStart(){
+  const phone = document.getElementById('tg-phone').value.trim();
+  const status = document.getElementById('tg-login-status');
+  if (!phone) { status.textContent = 'Enter your phone with country code.'; return; }
+  status.textContent = 'Requesting code from Telegram…';
+  try {
+    const r = await fetch('/api/admin/telegram/login/start', {
+      method:'POST',
+      headers:{'Authorization':'Bearer '+token,'Content-Type':'application/json'},
+      body: JSON.stringify({phone}),
+    });
+    const data = await r.json();
+    if (!data.success) { status.textContent = 'Error: ' + (data.error||'unknown'); return; }
+    status.textContent = '✓ ' + (data.message || 'Code sent.');
+    document.getElementById('tg-login-start').style.display = 'none';
+    document.getElementById('tg-login-verify').style.display = '';
+    document.getElementById('tg-phone-v').value = phone;
+  } catch (e) {
+    status.textContent = 'Network error: ' + e;
+  }
+}
+
+async function tgLoginVerify(){
+  const phone = document.getElementById('tg-phone-v').value.trim();
+  const code  = document.getElementById('tg-code').value.trim();
+  const status = document.getElementById('tg-verify-status');
+  if (!phone || !code) { status.textContent = 'Phone + code are required.'; return; }
+  status.textContent = 'Verifying…';
+  try {
+    const r = await fetch('/api/admin/telegram/login/verify', {
+      method:'POST',
+      headers:{'Authorization':'Bearer '+token,'Content-Type':'application/json'},
+      body: JSON.stringify({phone, code}),
+    });
+    const data = await r.json();
+    if (!data.success) { status.textContent = 'Error: ' + (data.error||'unknown'); return; }
+    status.textContent = '✓ ' + (data.message || 'Authorised.');
+    setTimeout(loadTelegramStatus, 1000);
+  } catch (e) {
+    status.textContent = 'Network error: ' + e;
+  }
+}
+
+async function loadTelegramChannels(){
+  try {
+    const r = await fetch('/api/admin/telegram/channels', {headers:{'Authorization':'Bearer '+token}});
+    const data = await r.json();
+    if (data.success) {
+      const names = data.channels.filter(c=>c.enabled).map(c=>'@'+c.channel).join(', ');
+      const el = document.getElementById('tg-watched');
+      if (el) el.textContent = names || '(none yet)';
+    }
+  } catch {}
+}
+
+async function submitTelegramOpportunity(){
+  const channel = document.getElementById('tg-channel').value.trim().replace(/^@/,'');
+  const sender  = document.getElementById('tg-sender').value.trim();
+  const message = document.getElementById('tg-message').value.trim();
+  const link    = document.getElementById('tg-link').value.trim();
+  const status  = document.getElementById('tg-submit-status');
+  if (!channel || !message) { status.textContent = 'Channel + message are required.'; return; }
+  status.textContent = 'Scoring...';
+  try {
+    const r = await fetch('/api/admin/telegram/opportunities', {
+      method: 'POST',
+      headers: {'Authorization':'Bearer '+token, 'Content-Type':'application/json'},
+      body: JSON.stringify({channel, message, sender: sender||null, link: link||null}),
+    });
+    const data = await r.json();
+    if (!data.success) { status.textContent = 'Error: ' + (data.error||'unknown'); return; }
+    status.textContent = `✓ Scored ${data.score}/100 (service: ${data.service_type||'none'})`;
+    document.getElementById('tg-message').value = '';
+    document.getElementById('tg-link').value = '';
+    loadTgOpportunities('');
+  } catch (e) {
+    status.textContent = 'Network error: ' + e;
+  }
+}
+
+async function loadTgOpportunities(filterStatus){
+  const out = document.getElementById('tg-opportunities-list');
+  out.innerHTML = '<div class="loading">Loading…</div>';
+  try {
+    const qs = filterStatus ? `?status=${encodeURIComponent(filterStatus)}` : '';
+    const r = await fetch('/api/admin/telegram/opportunities'+qs, {headers:{'Authorization':'Bearer '+token}});
+    const data = await r.json();
+    if (!data.success) { out.innerHTML = `<div class="msg msg-error">${data.error||'Failed'}</div>`; return; }
+    const items = data.opportunities || [];
+    if (items.length === 0) {
+      out.innerHTML = '<div class="empty"><span class="empty-icon">✈️</span>No opportunities yet. Paste one above.</div>';
+      return;
+    }
+    out.innerHTML = items.map(o => {
+      const score = o.score != null ? o.score : 0;
+      const cls = score >= 70 ? 'score-high' : score >= 40 ? 'score-mid' : 'score-low';
+      const svc = o.service_type ? `<span class="badge" style="background:rgba(122,76,255,0.15);color:var(--purple);padding:2px 8px;border-radius:10px;font-size:0.75rem;margin-left:6px">${o.service_type}</span>` : '';
+      const linkBtn = o.link ? `<a href="${o.link}" target="_blank" class="btn btn-sm btn-copy">↗ Open</a>` : '';
+      const statusBadge = `<span class="score-badge ${o.status==='new'?'score-mid':o.status==='won'?'score-high':'score-low'}" style="margin-right:8px">${o.status}</span>`;
+      return `
+        <div class="pb-job-row" style="display:block;margin-bottom:10px;padding:14px">
+          <div style="display:flex;gap:8px;align-items:center;margin-bottom:6px;flex-wrap:wrap">
+            <span class="score-badge ${cls}">${score}/100</span>
+            ${svc}
+            <span style="color:var(--dim);font-size:0.85rem">@${o.channel}${o.sender?' · '+o.sender:''}</span>
+            <span style="margin-left:auto">${statusBadge}</span>
+          </div>
+          <div style="color:var(--accent);font-size:0.9rem;line-height:1.5;margin-bottom:6px;white-space:pre-wrap">${o.message.replace(/</g,'&lt;')}</div>
+          ${o.score_reason ? `<div style="color:var(--dim);font-size:0.78rem;font-style:italic;margin-bottom:8px">${o.score_reason}</div>` : ''}
+          <div style="display:flex;gap:6px;flex-wrap:wrap">
+            ${linkBtn}
+            <button class="btn btn-sm btn-copy" onclick="tgSetStatus('${o.id}','contacted')">Contacted</button>
+            <button class="btn btn-sm btn-copy" onclick="tgSetStatus('${o.id}','won')">Won</button>
+            <button class="btn btn-sm btn-copy" onclick="tgSetStatus('${o.id}','ignored')">Ignore</button>
+          </div>
+        </div>`;
+    }).join('');
+  } catch (e) {
+    out.innerHTML = `<div class="msg msg-error">Network error: ${e}</div>`;
+  }
+}
+
+async function tgSetStatus(id, status){
+  try {
+    await fetch(`/api/admin/telegram/opportunities/${id}`, {
+      method: 'PATCH',
+      headers: {'Authorization':'Bearer '+token, 'Content-Type':'application/json'},
+      body: JSON.stringify({status}),
+    });
+    loadTgOpportunities('');
+  } catch {}
+}
+
+function scoreBadge(score){
+  if(score == null) return '<span style="color:#666">—</span>';
+  const pct = Math.round(score*100);
+  const cls = score>=0.7?'score-high':score>=0.4?'score-mid':'score-low';
+  return `<span class="score-badge ${cls}">${pct}%</span>`;
+}
+
+function platformIcon(p){
+  return p==='youtube'?'<span class="platform-yt">▶ YouTube</span>':'<span class="platform-tw">🎮 Twitch</span>';
+}
+
+function formatNum(n){
+  if(!n) return '—';
+  if(n>=1000000) return (n/1000000).toFixed(1)+'M';
+  if(n>=1000) return (n/1000).toFixed(1)+'K';
+  return n;
+}
+
+function contactTier(p){
+  const hasEmail = !!(p.business_email||'').trim();
+  const hasX = !!(p.twitter_handle||'').trim();
+  const hasIg = !!(p.instagram_handle||'').trim();
+  const hasUrl = !!(p.external_url||'').trim();
+  if(hasEmail && hasX) return {rank: 4, label: 'X + email', cls: 'score-high', guidance: 'Best lead: DM first, email follow-up, attach sample pack.'};
+  if(hasEmail) return {rank: 3, label: 'Email only', cls: 'score-mid', guidance: 'Send email with a concrete sample-pack CTA.'};
+  if(hasX) return {rank: 2, label: 'X only', cls: 'score-mid', guidance: 'Short verified-account DM; ask permission to send sample.'};
+  if(hasIg) return {rank: 2, label: 'IG only', cls: 'score-mid', guidance: 'DM on Instagram; ask permission to send sample.'};
+  if(hasUrl) return {rank: 1, label: 'Site only', cls: 'score-low', guidance: 'Open site and enrich public contact/social links.'};
+  return {rank: 0, label: 'Needs enrichment', cls: 'score-low', guidance: 'No public contact found yet; refresh/enrich before outreach.'};
+}
+
+function renderProspectContactSummary(prospects){
+  const root = document.getElementById('prospect-contact-summary');
+  if(!root) return;
+  const stats = prospects.reduce((acc,p)=>{
+    const tier = contactTier(p);
+    acc.total++;
+    if(tier.rank === 4) acc.best++;
+    if((p.business_email||'').trim()) acc.email++;
+    if((p.twitter_handle||'').trim()) acc.x++;
+    if((p.instagram_handle||'').trim()) acc.ig++;
+    if((p.sample_delivery_id||'').trim()) acc.samples++;
+    if(Number(p.revenue_priority||0) >= 120) acc.hot++;
+    return acc;
+  }, {total:0,best:0,email:0,x:0,ig:0,samples:0,hot:0});
+  root.innerHTML = [
+    ['Total leads', stats.total],
+    ['X + email ready', stats.best],
+    ['Email contacts', stats.email],
+    ['X handles', stats.x],
+    ['IG accounts', stats.ig],
+    ['Sample packs', stats.samples],
+    ['High-priority', stats.hot],
+  ].map(([label,value])=>`<div class="stat-card"><div class="stat-val">${value}</div><div class="stat-label">${label}</div></div>`).join('');
+}
+
+function renderContactQueue(prospects){
+  const root = document.getElementById('contact-queue-area');
+  if(!root) return;
+  const sorted = [...prospects].sort((a,b)=>{
+    const at = contactTier(a).rank;
+    const bt = contactTier(b).rank;
+    if(bt !== at) return bt - at;
+    return Number(b.revenue_priority||0) - Number(a.revenue_priority||0);
+  });
+  if(!sorted.length){
+    root.innerHTML = '<div class="empty"><span class="empty-icon">📭</span>No prospects yet.</div>';
+    return;
+  }
+  root.innerHTML = sorted.map(p=>{
+    const tier = contactTier(p);
+    const email = (p.business_email||'').trim();
+    const x = (p.twitter_handle||'').trim();
+    const igHandle = (p.instagram_handle||'').trim();
+    const url = (p.external_url||p.platform_url||'').trim();
+    const sampleUrl = p.sample_delivery_url ? `https://${appSubdomainForService(p.service_type)}.videosync.ink${p.sample_delivery_url}` : '';
+    const service = p.service_type || 'landing_page';
+    return `<div class="pb-job-row" style="grid-template-columns:minmax(220px,1fr) auto minmax(240px,1.2fr) auto">
+      <span>
+        <strong>${p.display_name}</strong>
+        <div style="font-size:0.78rem;color:var(--dim);margin-top:3px">${service.replaceAll('_',' ')} · priority ${p.revenue_priority||0}</div>
+      </span>
+      <span class="score-badge ${tier.cls}">${tier.label}</span>
+      <span style="font-size:0.82rem;color:var(--muted);line-height:1.5">
+        ${email?`Email: <a href="mailto:${email}" style="color:#86efac">${email}</a><br>`:''}
+        ${x?`X: <a href="https://x.com/${x.replace('@','')}" target="_blank" style="color:#93c5fd">${x}</a><br>`:''}
+        ${igHandle?`IG: <a href="https://instagram.com/${igHandle.replace('@','')}" target="_blank" style="color:#f9a8d4">${igHandle}</a><br>`:''}
+        ${url?`URL: <a href="${url}" target="_blank" style="color:#c4b5fd">open</a><br>`:''}
+        <em>${tier.guidance}</em>
+      </span>
+      <span style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end">
+        ${sampleUrl?`<a href="${sampleUrl}" target="_blank" class="btn btn-sm action-success">Sample</a>`:`<button class="btn btn-sm action-primary" onclick="generateSamplePack('${p.id}', '${encodeURIComponent(url)}', '${encodeURIComponent(service)}')">Generate Sample</button>`}
+        ${x?`<a class="btn btn-sm btn-copy" target="_blank" href="https://x.com/${x.replace('@','')}">Open X</a>`:''}
+        ${email?`<button class="btn btn-sm btn-copy" onclick="copyText('${encodeURIComponent(p.email_script||'')}')">Copy Email</button>`:''}
+        ${email&&p.email_script?`<button class="btn btn-sm action-primary" onclick="sendEmail('${p.id}')">📧 Send</button>`:''}
+        <button class="btn btn-sm btn-copy" onclick="copyText('${encodeURIComponent(p.x_dm_script||p.dm_script_creator||'')}')">Copy DM</button>
+      </span>
+    </div>`;
+  }).join('');
+}
+
+function appSubdomainForService(svc){
+  svc = (svc||'').toLowerCase();
+  if(['kick_auto_clipper','twitch_clipping','youtube_clipping','clipping'].includes(svc)) return 'clips';
+  if(svc==='landing_page') return 'app';
+  if(svc==='education') return 'learn';
+  if(['manim_explainer','whiteboard_animation','kinetic_typography','animated_infographic','algorithm_viz','investor_pitch','year_in_review','isometric_explainer'].includes(svc)) return 'motion';
+  if(svc==='shorts') return 'shorts';
+  return 'app';
+}
+
+async function loadProspects(){
+  let url = '/api/admin/prospects';
+  const params = [];
+  if(currentFilter!=='all') params.push(`contact_status=${currentFilter}`);
+  if(freshOnly) params.push('fresh_days=14');
+  if(params.length) url += '?' + params.join('&');
+
+  const res = await fetch(url, {headers:{'Authorization':'Bearer '+token}});
+  const data = await res.json();
+  if(!data.success){ document.getElementById('table-area').innerHTML = '<div class="empty">Failed to load prospects</div>'; return; }
+
+  const prospects = data.prospects||[];
+  renderProspectContactSummary(prospects);
+  renderContactQueue(prospects);
+  if(!prospects.length){ document.getElementById('table-area').innerHTML = '<div class="empty">No prospects found. Run a search above.</div>'; return; }
+
+  let html = `<table>
+    <thead><tr>
+      <th>Channel</th><th>Platform</th><th>Audience</th><th>Category</th>
+      <th>Owner</th><th>Added</th>
+      <th>Contacts</th><th>AI Score</th><th>DM Scripts</th><th>Status</th><th>Actions</th>
+    </tr></thead><tbody>`;
+
+  for(const p of prospects){
+    const dm = p.dm_script_creator||'';
+    const dmClip = p.dm_script_clipper||'';
+    const xDm = p.x_dm_script||dm||'';
+    const emailScript = p.email_script||'';
+    const tw = p.twitter_handle||'';
+    const ig = p.instagram_handle||'';
+    const email = p.business_email||'';
+    const ext = p.external_url||'';
+    const sampleUrl = p.sample_delivery_url ? `https://${appSubdomainForService(p.service_type)}.videosync.ink${p.sample_delivery_url}` : '';
+    const typeBadge = p.prospect_type ? `<span class="badge" style="background:rgba(59,130,246,0.15);color:#93c5fd;padding:2px 8px;border-radius:999px;font-size:0.72rem;margin-right:6px">${(p.prospect_type||'').replaceAll('_',' ')}</span>` : '';
+    const svcBadge = p.service_type ? `<span class="badge" style="background:rgba(122,76,255,0.15);color:var(--purple);padding:2px 8px;border-radius:999px;font-size:0.72rem">${p.service_type}</span>` : '';
+    const creators = (((p.contact_enrichment||{}).detected_source_creators)||[]).filter(Boolean);
+    const clipperBadge = creators.length ? `<span class="badge" style="background:rgba(74,222,128,0.13);color:#86efac;padding:2px 8px;border-radius:999px;font-size:0.72rem;margin-left:6px">✂ Clipper of @${creators[0]}${creators.length>1?` +${creators.length-1}`:''}</span>` : '';
+    const priorityBadge = p.revenue_priority ? `<span class="badge" style="background:rgba(34,197,94,0.13);color:#86efac;padding:2px 8px;border-radius:999px;font-size:0.72rem;margin-left:6px">rev ${p.revenue_priority}</span>` : '';
+    html += `<tr id="row-${p.id}">
+      <td><a href="${p.platform_url}" target="_blank" style="color:#dbd8e3;font-weight:500">${p.display_name}</a>
+        ${(typeBadge || svcBadge || clipperBadge || priorityBadge) ? `<div style="margin-top:6px">${typeBadge}${svcBadge}${clipperBadge}${priorityBadge}</div>` : ''}
+        ${p.ai_reasoning?`<div style="font-size:0.75rem;color:#9ca3af;margin-top:2px">${p.ai_reasoning}</div>`:''}
+      </td>
+      <td>${platformIcon(p.platform)}</td>
+      <td>${formatNum(p.subscriber_count||p.avg_viewer_count)}</td>
+      <td style="color:#9ca3af">${p.content_category||'—'}</td>
+      <td style="color:#9ca3af;font-size:0.78rem">${p.sourced_by_email||'—'}</td>
+      <td style="color:#9ca3af;font-size:0.78rem;white-space:nowrap">${timeAgo(p.created_at)}</td>
+      <td style="min-width:220px">
+        <div class="contact-stack">
+          ${email?`<div><a href="mailto:${email}" style="color:#86efac">${email}</a><button class="btn btn-sm btn-copy" style="margin-left:4px" onclick="copyText('${encodeURIComponent(email)}')">📋</button></div>`:''}
+          ${ig?`<div><a href="https://instagram.com/${ig.replace('@','')}" target="_blank" style="color:#f9a8d4">${ig}</a><button class="btn btn-sm btn-copy" style="margin-left:4px" onclick="copyText('${encodeURIComponent(ig)}')">📋</button></div>`:''}
+          ${tw?`<div><a href="https://twitter.com/${tw.replace('@','')}" target="_blank" style="color:#1d9bf0">${tw}</a><button class="btn btn-sm btn-copy" style="margin-left:4px" onclick="copyText('${encodeURIComponent(tw)}')">📋</button></div>`:''}
+          ${ext?`<div><a href="${ext}" target="_blank" style="color:#c4b5fd">site ↗</a><button class="btn btn-sm btn-copy" style="margin-left:4px" onclick="copyText('${encodeURIComponent(ext)}')">📋</button></div>`:''}
+          ${!email && !ig && !tw && !ext ? '—' : ''}
+        </div>
+      </td>
+      <td>${scoreBadge(p.ai_score)}</td>
+      <td style="min-width:220px">
+        <div class="dm-text">${xDm||'—'}</div>
+        <button class="btn btn-sm btn-copy" onclick="copyText('${encodeURIComponent(xDm)}')">📋 Copy X DM</button>
+        ${tw?`<a class="btn btn-sm btn-copy" target="_blank" href="https://x.com/${tw.replace('@','')}">Open X</a>`:''}
+        <div class="dm-text" style="margin-top:6px">${emailScript||'—'}</div>
+        <button class="btn btn-sm btn-copy" onclick="copyText('${encodeURIComponent(emailScript)}')">📋 Copy Email</button>
+        <div class="dm-text" style="margin-top:6px">${dmClip||'—'}</div>
+        <button class="btn btn-sm btn-copy" onclick="copyText('${encodeURIComponent(dmClip)}')">📋 Copy Clipper DM</button>
+        <button class="btn btn-sm btn-copy" style="margin-top:4px" onclick="regen('${p.id}')">🔄 Refresh</button>
+      </td>
+      <td>
+        <select class="status-select" onchange="updateStatus('${p.id}',this.value)">
+          ${['new','contacted','replied','converted','rejected'].map(s=>`<option value="${s}" ${s===p.contact_status?'selected':''}>${s}</option>`).join('')}
+        </select>
+        <input class="row-notes" placeholder="Notes…" value="${(p.notes||'').replace(/"/g,'&quot;')}" onblur="saveNotes('${p.id}',this.value)">
+      </td>
+      <td style="min-width:170px">
+        <div class="action-stack">
+          <div class="action-help">Next best actions for this lead.</div>
+          <a href="${p.platform_url}" target="_blank" class="btn btn-sm btn-copy">Open Profile</a>
+          ${p.service_page_url?`<a href="${p.service_page_url}" target="_blank" class="btn btn-sm btn-copy">Open Service Page</a>`:''}
+          ${sampleUrl?`<a href="${sampleUrl}" target="_blank" class="btn btn-sm action-success">View Sample Pack</a>`:`<button class="btn btn-sm action-primary" onclick="generateSamplePack('${p.id}', '${encodeURIComponent(ext||p.platform_url||'')}', '${encodeURIComponent(p.service_type||'landing_page')}')">Generate Sample Pack</button>`}
+          ${sampleUrl?`<button class="btn btn-sm btn-copy" onclick="generateOutreachForProspect('${p.id}', '${encodeURIComponent(sampleUrl)}')">Write Outreach</button>`:''}
+          <button class="btn btn-sm action-danger" onclick="deleteProspect('${p.id}')">Delete Lead</button>
+        </div>
+      </td>
+    </tr>`;
+  }
+  html += '</tbody></table>';
+  document.getElementById('table-area').innerHTML = html;
+}
+
+function copyText(encoded){
+  navigator.clipboard.writeText(decodeURIComponent(encoded)).then(()=>showMsg('Copied to clipboard!'));
+}
+
+function setFilter(f, el){
+  currentFilter = f;
+  document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
+  el.classList.add('active');
+  loadProspects();
+}
+
+let freshOnly = true;
+function toggleFresh(el){
+  freshOnly = el.checked;
+  loadProspects();
+}
+
+function timeAgo(iso){
+  if(!iso) return '—';
+  const s = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
+  if(s < 0) return 'just now';
+  if(s < 3600) return Math.max(1, Math.floor(s / 60)) + 'm ago';
+  if(s < 86400) return Math.floor(s / 3600) + 'h ago';
+  const d = Math.floor(s / 86400);
+  if(d > 30) return Math.floor(d / 30) + 'mo ago';
+  return d === 1 ? 'yesterday' : d + 'd ago';
+}
+
+async function runSearch(){
+  const payload = {
+    platform: document.getElementById('platform').value,
+    prospect_type: document.getElementById('prospect_type').value,
+    category: document.getElementById('category').value||undefined,
+    min_viewers: parseInt(document.getElementById('min_viewers').value)||undefined,
+    max_viewers: parseInt(document.getElementById('max_viewers').value)||undefined,
+    limit: parseInt(document.getElementById('limit').value)||20,
+    service: document.getElementById('service').value||undefined,
+  };
+  const status = document.getElementById('search-status');
+  status.textContent = 'Searching…';
+  const res = await fetch('/api/admin/prospects/search', {
+    method:'POST', headers:{'Authorization':'Bearer '+token,'Content-Type':'application/json'},
+    body: JSON.stringify(payload)
+  });
+  const data = await res.json();
+  // Background+poll (Oct 2026): searches run detached past the ~100s proxy
+  // cap. Poll the run until terminal, then refresh the table.
+  if(data.success && data.accepted && data.agent_run_id){
+    pollSearchRun(data.agent_run_id, 0);
+    return;
+  }
+  if(data.success){ showMsg(data.message); loadProspects(); }
+  else showMsg(data.message||'Search failed', false);
+  status.textContent = '';
+}
+
+async function pollSearchRun(runId, tries){
+  const status = document.getElementById('search-status');
+  if(tries > 150){ status.textContent = ''; showMsg('Search still running after ~20 min — results so far are in the table.', false); loadProspects(); return; }
+  status.textContent = `Searching… (${Math.round(tries*8)}s elapsed)`;
+  try{
+    const res = await fetch(`/api/admin/prospects/runs/${runId}`, {headers:{'Authorization':'Bearer '+token}});
+    const data = await res.json();
+    if(data.success && (data.status === 'completed' || data.status === 'failed')){
+      status.textContent = '';
+      showMsg(data.status === 'completed' ? `Search complete — ${data.found||0} prospects found` : `Search failed: ${data.error||'unknown'}`, data.status === 'completed');
+      loadProspects();
+      return;
+    }
+  }catch(e){ /* transient — keep polling */ }
+  setTimeout(() => pollSearchRun(runId, tries + 1), 8000);
+}
+
+async function huntPayload(){
+  return {
+    platform: document.getElementById('platform').value,
+    prospect_type: document.getElementById('prospect_type').value,
+    category: document.getElementById('category').value||undefined,
+    min_viewers: parseInt(document.getElementById('min_viewers').value)||undefined,
+    max_viewers: parseInt(document.getElementById('max_viewers').value)||undefined,
+    limit: parseInt(document.getElementById('limit').value)||20,
+    service: document.getElementById('service').value||undefined,
+  };
+}
+
+async function runHunt(){
+  const status = document.getElementById('search-status');
+  status.textContent = 'Hunting…';
+  const res = await fetch('/api/admin/prospects/hunt', {
+    method:'POST', headers:{'Authorization':'Bearer '+token,'Content-Type':'application/json'},
+    body: JSON.stringify(await huntPayload())
+  });
+  const data = await res.json();
+  if(data.success && data.accepted && data.agent_run_id){ pollSearchRun(data.agent_run_id, 0); return; }
+  if(data.success){ showMsg(data.message); loadProspects(); }
+  else showMsg(data.message||data.error||'Hunt failed', false);
+  status.textContent = '';
+}
+
+async function runRedistribute(){
+  const status = document.getElementById('search-status');
+  status.textContent = 'Redistributing…';
+  const res = await fetch('/api/admin/prospects/redistribute', {
+    method:'POST', headers:{'Authorization':'Bearer '+token,'Content-Type':'application/json'},
+    body: '{}'
+  });
+  const data = await res.json();
+  status.textContent = '';
+  showMsg(data.success ? `Redistributed ${data.redistributed} prospects across ${data.pool_size} team members` : (data.message||data.error||'Failed'), !!data.success);
+  loadProspects();
+}
+
+async function runKickInstagramSearch(){
+  const status = document.getElementById('ig-kick-status');
+  status.textContent = 'Launching Kick Instagram search…';
+  const payload = {
+    niche: document.getElementById('ig-kick-category').value||'gaming',
+    max_posts_per_hashtag: parseInt(document.getElementById('ig-kick-posts').value)||30,
+    hashtag_count: parseInt(document.getElementById('ig-kick-hashtags').value)||3,
+  };
+  try{
+    const res = await fetch('/api/instagram/leads/kick-auto-discover', {
+      method:'POST', headers:{'Authorization':'Bearer '+token,'Content-Type':'application/json'},
+      body: JSON.stringify(payload)
+    });
+    const data = await res.json();
+    if(data.success){ showMsg('Kick IG search started: '+data.message); }
+    else showMsg(data.error||'Kick IG search failed', false);
+  }catch(e){ showMsg('Kick IG search error: '+e.message, false); }
+  status.textContent = '';
+}
+
+async function updateStatus(id, status){
+  await fetch(`/api/admin/prospects/${id}`, {
+    method:'PATCH', headers:{'Authorization':'Bearer '+token,'Content-Type':'application/json'},
+    body: JSON.stringify({contact_status: status})
+  });
+}
+
+async function saveNotes(id, notes){
+  await fetch(`/api/admin/prospects/${id}`, {
+    method:'PATCH', headers:{'Authorization':'Bearer '+token,'Content-Type':'application/json'},
+    body: JSON.stringify({notes})
+  });
+}
+
+async function regen(id){
+  const res = await fetch(`/api/admin/prospects/${id}/dm-script`, {
+    method:'POST', headers:{'Authorization':'Bearer '+token}
+  });
+  const data = await res.json();
+  if(data.success){ showMsg('DM scripts refreshed'); loadProspects(); }
+  else showMsg('Refresh failed', false);
+}
+
+async function bulkSendEmails(){
+  if(!confirm('Send emails to all prospects with emails + outreach scripts? Skips already-contacted.')) return;
+  const status = document.getElementById('bulk-send-status');
+  status.textContent = 'Queueing…';
+  try {
+    const res = await fetch('/api/admin/prospects/bulk-send-email', {
+      method:'POST',
+      headers:{'Authorization':'Bearer '+token,'Content-Type':'application/json'},
+      body: JSON.stringify({limit: 100})
+    });
+    const data = await res.json();
+    if(data.success){
+      status.textContent = `✓ ${data.queued} queued (${data.skipped_no_script||0} skipped — no outreach). Check Email Logs.`;
+      showMsg(data.message||'Bulk send queued');
+    } else {
+      status.textContent = 'Error: '+(data.message||data.error||'failed');
+      showMsg(data.message||data.error||'Bulk send failed', false);
+    }
+  } catch(e){
+    status.textContent = 'Network error: '+e;
+    showMsg('Network error: '+e, false);
+  }
+}
+
+async function generateSamplePack(id, encodedUrl, encodedService){
+  const sourceUrl = decodeURIComponent(encodedUrl||'').trim();
+  const serviceType = decodeURIComponent(encodedService||'landing_page').trim() || 'landing_page';
+  showMsg('Queueing revenue sample pack…');
+  const res = await fetch(`/api/admin/prospects/${id}/generate-sample-pack`, {
+    method:'POST',
+    headers:{'Authorization':'Bearer '+token,'Content-Type':'application/json'},
+    body: JSON.stringify({source_url: sourceUrl || null, offer_type: serviceType})
+  });
+  const data = await res.json();
+  if(data.success){
+    const fullUrl = `${window.location.origin}${data.delivery_url}`;
+    showMsg('Sample pack queued: '+fullUrl);
+    await generateOutreachForProspect(id, encodeURIComponent(fullUrl));
+    loadProspects();
+  } else {
+    showMsg(data.message||data.error||'Sample pack failed', false);
+  }
+}
+
+async function sendEmail(id){
+  showMsg('Sending email via AWS SES…');
+  const res = await fetch(`/api/admin/prospects/${id}/send-email`, {
+    method:'POST',
+    headers:{'Authorization':'Bearer '+token,'Content-Type':'application/json'}
+  });
+  const data = await res.json();
+  if(data.success){
+    showMsg(`Email sent to ${data.to} (ID: ${data.message_id})`);
+  } else {
+    showMsg(data.message||data.error||'Send failed', false);
+  }
+}
+
+async function generateOutreachForProspect(id, encodedDeliveryUrl){
+  const deliveryUrl = decodeURIComponent(encodedDeliveryUrl||'');
+  if(!deliveryUrl) { showMsg('Missing delivery URL', false); return; }
+  const res = await fetch(`/api/admin/prospects/${id}/generate-outreach`, {
+    method:'POST',
+    headers:{'Authorization':'Bearer '+token,'Content-Type':'application/json'},
+    body: JSON.stringify({delivery_url: deliveryUrl})
+  });
+  const data = await res.json();
+  if(data.success){
+    const combined = `X DM:\n${data.x_dm||data.outreach_message||''}\n\nEMAIL:\n${data.email_script||''}`;
+    await navigator.clipboard.writeText(combined);
+    showMsg('Outreach copied with sample link');
+    loadProspects();
+  } else {
+    showMsg(data.message||'Outreach generation failed', false);
+  }
+}
+
+async function deleteProspect(id){
+  if(!confirm('Remove this prospect?')) return;
+  await fetch(`/api/admin/prospects/${id}`, {method:'DELETE', headers:{'Authorization':'Bearer '+token}});
+  document.getElementById(`row-${id}`)?.remove();
+}
+
+loadProspects();
+
+// ── View switcher ──────────────────────────────────────────────
+function showView(v) {
+  document.getElementById('view-prospects').style.display = v==='prospects'?'':'none';
+  document.getElementById('view-contacts').style.display  = v==='contacts'?'':'none';
+  document.getElementById('view-clipgen').style.display   = v==='clipgen'?'':'none';
+  // Toggle the active class instead of inline-style overrides — keeps the
+  // ghost/primary palette consistent with the rest of the UI.
+  const bp = document.getElementById('btn-prospects');
+  const bq = document.getElementById('btn-contacts');
+  const bc = document.getElementById('btn-clipgen');
+  bp.classList.toggle('btn-primary', v==='prospects');
+  bp.classList.toggle('btn-ghost',   v!=='prospects');
+  bq.classList.toggle('btn-primary', v==='contacts');
+  bq.classList.toggle('btn-ghost',   v!=='contacts');
+  bc.classList.toggle('btn-primary', v==='clipgen');
+  bc.classList.toggle('btn-ghost',   v!=='clipgen');
+  if(v==='clipgen') loadProspectsDropdown();
+}
+
+// ── Clip Generator ─────────────────────────────────────────────
+let cgProspects = [];
+let cgJobId = null;
+let cgPollInterval = null;
+let cgSelectedProspectId = null;
+
+async function loadProspectsDropdown() {
+  const res = await fetch('/api/admin/prospects?limit=200', {headers:{'Authorization':'Bearer '+token}});
+  const data = await res.json();
+  cgProspects = data.prospects||[];
+  const sel = document.getElementById('cg-prospect');
+  sel.innerHTML = '<option value="">— select a prospect —</option>' +
+    cgProspects.map(p=>`<option value="${p.id}" data-url="${p.platform_url}">${p.display_name} (${p.content_category||p.platform})</option>`).join('');
+}
+
+function onProspectSelect(sel) {
+  const opt = sel.options[sel.selectedIndex];
+  if(opt.value) {
+    cgSelectedProspectId = opt.value;
+    document.getElementById('cg-url').value = opt.dataset.url||'';
+  }
+}
+
+async function startClipJob() {
+  const url = document.getElementById('cg-url').value.trim();
+  if(!url) { showMsg('Enter a video URL', false); return; }
+  document.getElementById('cg-status').textContent = 'Starting…';
+  document.getElementById('cg-results').style.display='none';
+  document.getElementById('cg-delivery').style.display='none';
+  document.getElementById('cg-outreach').style.display='none';
+
+  const res = await fetch('/api/manual-clipping/jobs', {
+    method:'POST',
+    headers:{'Authorization':'Bearer '+token,'Content-Type':'application/json'},
+    body: JSON.stringify({
+      video_url: url,
+      clips_requested: parseInt(document.getElementById('cg-clips').value)||3,
+      min_clip_duration_seconds: parseInt(document.getElementById('cg-min-dur').value)||30,
+      max_clip_duration_seconds: parseInt(document.getElementById('cg-max-dur').value)||90,
+    })
+  });
+  const data = await res.json();
+  if(!data.success||!data.job_id) { showMsg(data.message||'Failed to start job', false); document.getElementById('cg-status').textContent=''; return; }
+
+  cgJobId = data.job_id;
+  document.getElementById('cg-status').textContent = '';
+  document.getElementById('cg-progress').style.display='';
+  startPolling();
+}
+
+function startPolling() {
+  if(cgPollInterval) clearInterval(cgPollInterval);
+  cgPollInterval = setInterval(pollJob, 4000);
+  pollJob();
+}
+
+async function pollJob() {
+  if(!cgJobId) return;
+  const res = await fetch(`/api/manual-clipping/jobs/${cgJobId}`, {headers:{'Authorization':'Bearer '+token}});
+  const data = await res.json();
+  if(!data.job) return;
+  const job = data.job;
+  document.getElementById('cg-progress-label').textContent = job.status + (job.progress_percent?` — ${job.progress_percent}%`:'');
+  document.getElementById('cg-progress-bar').style.width = (job.progress_percent||0)+'%';
+
+  if(job.status==='completed') {
+    clearInterval(cgPollInterval);
+    document.getElementById('cg-progress').style.display='none';
+    showClipResults(data.clips||[]);
+  } else if(job.status==='failed') {
+    clearInterval(cgPollInterval);
+    document.getElementById('cg-progress').style.display='none';
+    showMsg('Job failed: '+(job.error_message||'unknown'), false);
+  }
+}
+
+function showClipResults(clips) {
+  const list = document.getElementById('cg-clips-list');
+  if(!clips.length) { list.innerHTML='<div class="empty">No clips generated</div>'; }
+  else {
+    list.innerHTML = clips.map((c,i)=>`
+      <div class="pb-job-row">
+        <span class="pb-job-url">Clip ${i+1}: ${c.title||'Clip '+(i+1)} (${Math.round(c.duration_seconds||0)}s)</span>
+        ${c.r2_clip_url?`<a href="${c.r2_clip_url}" target="_blank" class="btn btn-sm btn-copy">⬇ Download</a>`:'<span></span>'}
+        ${c.r2_clip_url?`<button class="btn btn-sm btn-copy" onclick="copyText('${encodeURIComponent(c.r2_clip_url)}')">🔗 Copy</button>`:'<span></span>'}
+        <span></span>
+      </div>`).join('');
+  }
+  document.getElementById('cg-results').style.display='';
+}
+
+async function createDelivery() {
+  const prospect = cgProspects.find(p=>p.id===cgSelectedProspectId);
+  const title = prospect ? `Demo clips for ${prospect.display_name}` : 'Demo clip delivery';
+  const res = await fetch('/api/admin/deliveries', {
+    method:'POST',
+    headers:{'Authorization':'Bearer '+token,'Content-Type':'application/json'},
+    body: JSON.stringify({
+      client_ref: prospect?.display_name||'prospect',
+      title,
+      gig_type: 'clips',
+      prompt: `Demo clips from manual clipping job ${cgJobId}`,
+      style: 'viral',
+      duration: 60,
+      extra_args: {job_id: cgJobId},
+    })
+  });
+  const data = await res.json();
+  if(!data.id&&!data.delivery_id) { showMsg('Failed to create delivery', false); return; }
+  const id = data.id||data.delivery_id;
+  const deliveryUrl = `${window.location.origin}/delivery/${id}`;
+  document.getElementById('cg-delivery-url').value = deliveryUrl;
+  document.getElementById('cg-delivery').style.display='';
+  showMsg('Delivery package created!');
+}
+
+async function generateOutreach() {
+  const deliveryUrl = document.getElementById('cg-delivery-url').value;
+  if(!cgSelectedProspectId||!deliveryUrl) { showMsg('Select a prospect and create delivery first', false); return; }
+  const res = await fetch(`/api/admin/prospects/${cgSelectedProspectId}/generate-outreach`, {
+    method:'POST',
+    headers:{'Authorization':'Bearer '+token,'Content-Type':'application/json'},
+    body: JSON.stringify({delivery_url: deliveryUrl})
+  });
+  const data = await res.json();
+  if(!data.success) { showMsg(data.message||'Failed to generate message', false); return; }
+  document.getElementById('cg-outreach-text').textContent = data.outreach_message;
+  document.getElementById('cg-outreach').style.display='';
+}
+
+function copyEl(id) {
+  const el = document.getElementById(id);
+  navigator.clipboard.writeText(el.value||el.textContent).then(()=>showMsg('Copied!'));
+}
+</script>
+</body>
+</html>
+"###;
+
+// ─── LinkedIn / PhantomBuster handlers ────────────────────────────────────────
+
+#[derive(Debug, serde::Deserialize)]
+struct LinkedInLaunchRequest {
+    agent_id: String,
+    search_url: String,
+    session_cookie: String,
+    max_profiles: Option<u32>,
+}
+
+/// GET /api/admin/prospects/linkedin/agents
+/// Returns PhantomBuster agents visible to this account.
+async fn linkedin_list_agents(
+    Extension(state): Extension<Arc<AppState>>,
+) -> Json<serde_json::Value> {
+    let Some(pb) = state.phantombuster_client.as_ref() else {
+        return Json(
+            json!({"success": false, "error": "PhantomBuster not configured (PHANTOMBUSTER_API_KEY missing)"}),
+        );
+    };
+    match pb.list_agents().await {
+        Ok(agents) => {
+            let agents = agents
+                .into_iter()
+                .map(|agent| {
+                    let kind =
+                        crate::phantombuster_client::PhantomBusterClient::classify_linkedin_phantom(
+                            &agent.name,
+                        );
+                    let kind_label = match kind {
+                        Some(crate::phantombuster_client::LinkedInPhantomKind::SalesNavSearch) => {
+                            "sales_nav_search"
+                        }
+                        Some(crate::phantombuster_client::LinkedInPhantomKind::LinkedInSearch) => {
+                            "linkedin_search"
+                        }
+                        Some(crate::phantombuster_client::LinkedInPhantomKind::LeadOutreach) => {
+                            "lead_outreach"
+                        }
+                        Some(crate::phantombuster_client::LinkedInPhantomKind::EventGuests) => {
+                            "event_guests"
+                        }
+                        Some(crate::phantombuster_client::LinkedInPhantomKind::ProfileScraper) => {
+                            "profile_scraper"
+                        }
+                        None => "unknown",
+                    };
+                    json!({
+                        "id": agent.id,
+                        "name": agent.name,
+                        "lastEndStatus": agent.last_end_status,
+                        "lastEndMessage": agent.last_end_message,
+                        "kind": kind_label
+                    })
+                })
+                .collect::<Vec<_>>();
+            Json(json!({"success": true, "agents": agents}))
+        }
+        Err(e) => Json(json!({"success": false, "error": e})),
+    }
+}
+
+/// POST /api/admin/prospects/linkedin/launch
+/// Launch a Sales Navigator search export phantom.
+async fn linkedin_launch_search(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(req): Json<LinkedInLaunchRequest>,
+) -> Json<serde_json::Value> {
+    // Service switch (owner directive Sep 2026): LinkedIn discovery feeds B2B
+    // SaaS prospects (landing_page business, currently OFF). Clipper/creator
+    // prospecting (YouTube/Twitch/Kick/IG/Telegram) is unaffected.
+    if !crate::services::service_flags::service_enabled(&state.db_pool, "landing_page").await {
+        return Json(
+            json!({"success": false, "error": "LinkedIn discovery is currently disabled (landing_page off in service_flags)."}),
+        );
+    }
+    let Some(pb) = state.phantombuster_client.as_ref() else {
+        return Json(json!({"success": false, "error": "PhantomBuster not configured"}));
+    };
+
+    let max = req.max_profiles.unwrap_or(100);
+    let agents = match pb.list_agents().await {
+        Ok(agents) => agents,
+        Err(error) => {
+            return Json(json!({
+                "success": false,
+                "error": format!("Failed to list PhantomBuster agents: {}", error)
+            }))
+        }
+    };
+
+    let Some(agent) = agents.into_iter().find(|agent| agent.id == req.agent_id) else {
+        return Json(json!({
+            "success": false,
+            "error": "The selected PhantomBuster agent was not found in the workspace."
+        }));
+    };
+
+    let launch_result =
+        match crate::phantombuster_client::PhantomBusterClient::classify_linkedin_phantom(
+            &agent.name,
+        ) {
+            Some(crate::phantombuster_client::LinkedInPhantomKind::SalesNavSearch) => {
+                if !crate::phantombuster_client::PhantomBusterClient::looks_like_sales_nav_search(
+                    &req.search_url,
+                ) {
+                    return Json(json!({
+                        "success": false,
+                        "error": "This phantom expects a Sales Navigator people-search URL. Paste a linkedin.com/sales/search/... URL or use the smart-search launcher instead."
+                    }));
+                }
+                pb.launch_agent(&req.agent_id, &req.search_url, &req.session_cookie, max)
+                    .await
+            }
+            Some(crate::phantombuster_client::LinkedInPhantomKind::LinkedInSearch) => {
+                if crate::phantombuster_client::PhantomBusterClient::looks_like_sales_nav_search(
+                    &req.search_url,
+                ) {
+                    return Json(json!({
+                        "success": false,
+                        "error": "This phantom is a regular LinkedIn Search Export, not a Sales Navigator phantom. Use a normal linkedin.com/search/results/... URL, plain keywords, or switch to a Sales Navigator Search Export phantom."
+                    }));
+                }
+                pb.launch_linkedin_search(&req.agent_id, &req.search_url, &req.session_cookie, max)
+                    .await
+            }
+            Some(crate::phantombuster_client::LinkedInPhantomKind::LeadOutreach) => {
+                return Json(json!({
+                    "success": false,
+                    "error": "The selected phantom is a LinkedIn Lead Outreach phantom. It expects messaging-specific inputs and cannot be used for scrape-only lead search launches."
+                }));
+            }
+            Some(crate::phantombuster_client::LinkedInPhantomKind::EventGuests) => {
+                return Json(json!({
+                    "success": false,
+                    "error": "The selected phantom is for LinkedIn Event Guests. Paste an event URL there instead, or choose a search-export phantom for lead search."
+                }));
+            }
+            Some(crate::phantombuster_client::LinkedInPhantomKind::ProfileScraper) => {
+                return Json(json!({
+                    "success": false,
+                    "error": "The selected phantom scrapes profile lists, not searches. Use a Search Export phantom for this workflow."
+                }));
+            }
+            None => {
+                return Json(json!({
+                    "success": false,
+                    "error": "The selected PhantomBuster agent is not recognized as a supported LinkedIn search phantom."
+                }));
+            }
+        };
+
+    match launch_result {
+        Err(e) => return Json(json!({"success": false, "error": e})),
+        Ok(container_id) => {
+            // Record the job in DB
+            let job_id = match sqlx::query_scalar::<_, uuid::Uuid>(
+                "INSERT INTO phantombuster_jobs (agent_id, search_url, status, launched_at)
+                 VALUES ($1, $2, 'running', NOW()) RETURNING id",
+            )
+            .bind(&req.agent_id)
+            .bind(&req.search_url)
+            .fetch_one(&state.db_pool)
+            .await
+            {
+                Ok(id) => id,
+                Err(e) => {
+                    return Json(json!({"success": false, "error": format!("DB error: {}", e)}))
+                }
+            };
+
+            Json(json!({
+                "success": true,
+                "job_id": job_id.to_string(),
+                "container_id": container_id,
+                "message": format!("Phantom launched with '{}' in the correct LinkedIn mode. Poll /api/admin/prospects/linkedin/jobs/{}/results to fetch leads when complete.", agent.name, job_id)
+            }))
+        }
+    }
+}
+
+/// GET /api/admin/prospects/linkedin/jobs
+async fn linkedin_list_jobs(Extension(state): Extension<Arc<AppState>>) -> Json<serde_json::Value> {
+    let rows = sqlx::query(
+        "SELECT id, agent_id, search_url, status, leads_found, error, launched_at, completed_at
+         FROM phantombuster_jobs ORDER BY created_at DESC LIMIT 50",
+    )
+    .fetch_all(&state.db_pool)
+    .await
+    .unwrap_or_default();
+
+    let jobs: Vec<serde_json::Value> = rows.iter().map(|r| json!({
+        "id":           r.try_get::<uuid::Uuid,_>("id").map(|u| u.to_string()).unwrap_or_default(),
+        "agent_id":     r.try_get::<String,_>("agent_id").unwrap_or_default(),
+        "search_url":   r.try_get::<Option<String>,_>("search_url").unwrap_or_default(),
+        "status":       r.try_get::<String,_>("status").unwrap_or_default(),
+        "leads_found":  r.try_get::<Option<i32>,_>("leads_found").unwrap_or_default(),
+        "error":        r.try_get::<Option<String>,_>("error").unwrap_or_default(),
+        "launched_at":  r.try_get::<Option<chrono::DateTime<chrono::Utc>>,_>("launched_at").ok().flatten().map(|t| t.to_rfc3339()),
+        "completed_at": r.try_get::<Option<chrono::DateTime<chrono::Utc>>,_>("completed_at").ok().flatten().map(|t| t.to_rfc3339()),
+    })).collect();
+
+    Json(json!({"success": true, "jobs": jobs}))
+}
+
+/// GET /api/admin/prospects/linkedin/jobs/:job_id/results
+/// Fetches output from PhantomBuster and imports leads into prospects table.
+async fn linkedin_fetch_results(
+    Extension(state): Extension<Arc<AppState>>,
+    axum::extract::Path(job_id): axum::extract::Path<uuid::Uuid>,
+) -> Json<serde_json::Value> {
+    let Some(pb) = state.phantombuster_client.as_ref() else {
+        return Json(json!({"success": false, "error": "PhantomBuster not configured"}));
+    };
+
+    // Get agent_id from DB
+    let agent_id: String =
+        match sqlx::query_scalar("SELECT agent_id FROM phantombuster_jobs WHERE id = $1")
+            .bind(job_id)
+            .fetch_optional(&state.db_pool)
+            .await
+        {
+            Ok(Some(id)) => id,
+            _ => return Json(json!({"success": false, "error": "Job not found"})),
+        };
+
+    // Fetch output
+    let rows = match pb.fetch_output(&agent_id).await {
+        Ok(r) => r,
+        Err(e) => return Json(json!({"success": false, "error": e})),
+    };
+
+    // If PB returned no rows, confirm whether the run actually succeeded or
+    // errored — otherwise the DB row stays 'running' forever and the caller
+    // has no idea the phantom failed.
+    if rows.is_empty() {
+        if let Ok((errored, log_tail)) = pb.fetch_run_error(&agent_id).await {
+            if errored {
+                let err_msg = log_tail
+                    .unwrap_or_else(|| "PhantomBuster script exited with error".to_string());
+                let _ = sqlx::query(
+                    "UPDATE phantombuster_jobs SET status = 'failed', error = $1, completed_at = NOW() WHERE id = $2"
+                )
+                .bind(&err_msg)
+                .bind(job_id)
+                .execute(&state.db_pool)
+                .await;
+                return Json(json!({
+                    "success": false,
+                    "error": err_msg,
+                    "message": "PhantomBuster run failed — see error field. Job marked failed."
+                }));
+            }
+        }
+    }
+
+    let leads = crate::phantombuster_client::PhantomBusterClient::parse_leads(rows);
+    let count = leads.len();
+
+    // Upsert into prospects table
+    let mut imported = 0usize;
+    for lead in &leads {
+        let linkedin_id = lead
+            .linkedin_url
+            .clone()
+            .unwrap_or_else(|| format!("li_{}", lead.full_name.to_lowercase().replace(' ', "_")));
+
+        // Extract contact fields from the lead before upsert.
+        let description = lead.company_name.clone().unwrap_or_default();
+        let mut twitter_handle = extract_best_twitter_handle(&description);
+        let mut instagram_handle = extract_best_instagram_handle(&description);
+        let mut business_email = lead.email.clone();
+        let mut external_url = lead.company_url.clone();
+        // If no company URL was provided, try to guess one from the company name.
+        if external_url.is_none() {
+            if let Some(company_name) = lead.company_name.as_deref() {
+                if !company_name.trim().is_empty() {
+                    if let Some(guessed) = guess_company_website(company_name).await {
+                        external_url = Some(guessed);
+                    }
+                }
+            }
+        }
+        let enrichment_url = external_url.clone();
+        let _contact_enrichment = enrich_public_contact_fields(
+            enrichment_url.as_deref(),
+            &mut twitter_handle,
+            &mut instagram_handle,
+            &mut business_email,
+            &mut external_url,
+        )
+        .await;
+
+        let result = sqlx::query(
+            "INSERT INTO prospects
+               (platform, channel_id, display_name, platform_url, prospect_type,
+                linkedin_url, job_title, company_name, company_size, seniority_level, email,
+                external_url, business_email, twitter_handle, instagram_handle, contact_status)
+             VALUES ('linkedin', $1, $2, $3, 'linkedin_lead', $4, $5, $6, $7, $8, $9,
+                     $10, $11, $12, $13, 'new')
+             ON CONFLICT (platform, channel_id) DO UPDATE
+               SET job_title = EXCLUDED.job_title,
+                   company_name = EXCLUDED.company_name,
+                   external_url = EXCLUDED.external_url,
+                   business_email = EXCLUDED.business_email,
+                   twitter_handle = EXCLUDED.twitter_handle,
+                   instagram_handle = EXCLUDED.instagram_handle,
+                   updated_at = NOW()",
+        )
+        .bind(&linkedin_id)
+        .bind(&lead.full_name)
+        .bind(lead.linkedin_url.as_deref().unwrap_or(""))
+        .bind(&lead.linkedin_url)
+        .bind(&lead.job_title)
+        .bind(&lead.company_name)
+        .bind(&lead.company_size)
+        .bind(&lead.seniority)
+        .bind(&lead.email)
+        .bind(&external_url)
+        .bind(&business_email)
+        .bind(&twitter_handle)
+        .bind(&instagram_handle)
+        .execute(&state.db_pool)
+        .await;
+
+        if result.is_ok() {
+            imported += 1;
+        }
+    }
+
+    // Update job record
+    let _ = sqlx::query(
+        "UPDATE phantombuster_jobs SET status = 'completed', leads_found = $1, completed_at = NOW() WHERE id = $2"
+    )
+    .bind(imported as i32)
+    .bind(job_id)
+    .execute(&state.db_pool)
+    .await;
+
+    // Score imported leads with AI in the background (non-blocking)
+    if imported > 0 {
+        let state_clone = state.clone();
+        let job_id_clone = job_id;
+        tokio::spawn(async move {
+            ai_score_linkedin_leads(&state_clone, job_id_clone).await;
+        });
+    }
+
+    Json(json!({
+        "success": true,
+        "total_fetched": count,
+        "imported_to_prospects": imported,
+        "message": format!("{} LinkedIn leads imported. AI scoring started in background — check /admin/prospect-finder in ~1 minute.", imported)
+    }))
+}
+
 // ─── Smart search: build URL from filters + auto-launch ───────────────────────
 
 #[derive(Debug, serde::Deserialize)]
