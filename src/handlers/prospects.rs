@@ -3886,9 +3886,8 @@ async fn bulk_send_prospect_emails(
             "Outreach batch created: {} prospects. {} sample video(s) will be generated first (background lane); each email is sent automatically once its sample is ready. Progress: /admin/email-logs.",
             candidates.len(), sample_needed
         ),
-    }))
+    })))
 }
-
 
 // ─── Smart search: build URL from filters + auto-launch ───────────────────────
 
@@ -5379,7 +5378,6 @@ async fn instagram_generate_sample(
             idempotency_key: Some(format!("instagram-lead-long-form:{id}")),
             reference_images: vec![],
         nim_profile: None,
-        lane: "interactive".to_string(),
         };
         match crate::services::AgenticServicePipeline::start(
             state.clone(),
