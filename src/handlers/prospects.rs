@@ -3826,10 +3826,10 @@ async fn bulk_send_prospect_emails(
     .bind(candidates.len() as i32)
     .fetch_one(&state.db_pool)
     .await
-    .map_err(|e| ErrorResponse {
-        success: false,
-        message: format!("Failed to create outreach batch: {e}"),
-    })?;
+    .map_err(|e| (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(json!({"success": false, "message": format!("Failed to create outreach batch: {e}")})),
+    ))?;
 
     let mut sample_needed = 0usize;
     let mut sample_recent = 0usize;
@@ -8262,6 +8262,7 @@ async fn instagram_generate_sample(
             idempotency_key: Some(format!("instagram-lead-long-form:{id}")),
             reference_images: vec![],
         nim_profile: None,
+        lane: "interactive".to_string(),
         };
         match crate::services::AgenticServicePipeline::start(
             state.clone(),

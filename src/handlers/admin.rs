@@ -10489,6 +10489,7 @@ pub async fn ensure_delivery_workflow(
                 "gig_type": gig_type,
                 "prompt_preview": prompt.chars().take(240).collect::<String>(),
             }),
+            lane: "interactive".to_string(),
             artifact_requirements: serde_json::json!([
                 {
                     "kind": "delivery_output",

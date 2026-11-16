@@ -204,6 +204,7 @@ pub async fn api_generate_sample(
                 "service_type": service_type.clone(),
                 "prompt_preview": prompt.chars().take(240).collect::<String>(),
             }),
+            lane: "interactive".to_string(),
             artifact_requirements: json!([
                 {
                     "kind": "gig_template_sample",

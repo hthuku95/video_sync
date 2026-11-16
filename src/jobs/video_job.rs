@@ -163,6 +163,7 @@ impl VideoEditingJob {
                     "agent_type": "claude",
                     "job_type": self.job.job_type.clone(),
                 }),
+                lane: "interactive".to_string(),
                 artifact_requirements: json!([]),
             })
             .await

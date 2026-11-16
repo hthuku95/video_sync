@@ -329,6 +329,7 @@ pub async fn create_service_sample_request(
                 "prospect_name": prospect_name.clone(),
                 "brief": brief,
             }),
+            lane: "interactive".to_string(),
             artifact_requirements: json!([
                 {
                     "kind": "buyer_facing_sample",

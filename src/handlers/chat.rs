@@ -1733,6 +1733,7 @@ async fn create_agent_job(
                     "service_sample_request": is_service_sample_request,
                     "expects_generated_artifact": expects_generated_artifact,
                 }),
+                lane: "interactive".to_string(),
                 artifact_requirements,
             })
             .await
