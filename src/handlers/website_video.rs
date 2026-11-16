@@ -45,6 +45,7 @@ pub fn website_video_routes() -> Router {
         )
         .route("/api/website-video/generate", post(generate))
         .route("/api/website-video/videos", get(list_videos))
+        .route("/api/motion/videos", get(list_motion_videos))
         .layer(axum::middleware::from_fn(
             crate::middleware::auth::auth_middleware,
         ))
@@ -910,8 +911,9 @@ async fn generate(
 
 // ── Listing ─────────────────────────────────────────────────────────────────
 
-/// GET /api/website-video/videos — the authenticated user's deliveries.
-async fn list_videos(
+/// GET /api/motion/videos — the authenticated user's deliveries for the 8
+/// motion services (motion.videosync.ink's Videos page).
+async fn list_motion_videos(
     Extension(claims): Extension<Claims>,
     Extension(state): Extension<Arc<AppState>>,
 ) -> (StatusCode, Json<Value>) {
@@ -923,7 +925,66 @@ async fn list_videos(
     let rows = match sqlx::query(
         "SELECT id, title, status, output_r2_url, preview_r2_url, error_message, created_at, completed_at
          FROM deliveries
-         WHERE user_id = $1
+         WHERE user_id = $1 AND gig_type IN (
+             'manim_explainer','whiteboard_animation','kinetic_typography',
+             'animated_infographic','algorithm_viz','investor_pitch',
+             'year_in_review','isometric_explainer'
+         )
+         ORDER BY created_at DESC
+         LIMIT 200",
+    )
+    .bind(uid)
+    .fetch_all(&state.db_pool)
+    .await
+    {
+        Ok(rows) => rows,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"success": false, "error": format!("DB error: {e}")})),
+            )
+        }
+    };
+
+    let deliveries: Vec<Value> = rows
+        .iter()
+        .map(|row| {
+            json!({
+                "id": row.get::<Uuid, _>("id").to_string(),
+                "title": row.get::<String, _>("title"),
+                "status": row.get::<String, _>("status"),
+                "output_r2_url": row.try_get::<Option<String>, _>("output_r2_url").ok().flatten(),
+                "preview_r2_url": row.try_get::<Option<String>, _>("preview_r2_url").ok().flatten(),
+                "error_message": row.try_get::<Option<String>, _>("error_message").ok().flatten(),
+                "created_at": row.get::<chrono::DateTime<chrono::Utc>, _>("created_at").to_rfc3339(),
+                "completed_at": row.try_get::<Option<chrono::DateTime<chrono::Utc>>, _>("completed_at").ok().flatten().map(|d| d.to_rfc3339()),
+            })
+        })
+        .collect();
+
+    (
+        StatusCode::OK,
+        Json(json!({"success": true, "deliveries": deliveries})),
+    )
+}
+
+/// GET /api/website-video/videos — the authenticated user's deliveries.
+async fn list_videos(
+    Extension(claims): Extension<Claims>,
+    Extension(state): Extension<Arc<AppState>>,
+) -> (StatusCode, Json<Value>) {
+    let uid = match user_id(&claims) {
+        Ok(u) => u,
+        Err(e) => return e,
+    };
+
+    // Per-app service filter (owner directive Nov 16 2026): app.videosync.ink
+    // is the LANDING PAGE service — its Videos page must not show deliveries
+    // from other services (education-posting, campaigns, etc.).
+    let rows = match sqlx::query(
+        "SELECT id, title, status, output_r2_url, preview_r2_url, error_message, created_at, completed_at
+         FROM deliveries
+         WHERE user_id = $1 AND gig_type = 'landing_page'
          ORDER BY created_at DESC
          LIMIT 200",
     )
