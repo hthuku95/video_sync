@@ -3828,7 +3828,10 @@ async fn bulk_send_prospect_emails(
     .await
     .map_err(|e| (
         StatusCode::INTERNAL_SERVER_ERROR,
-        Json(json!({"success": false, "message": format!("Failed to create outreach batch: {e}")})),
+        Json(ErrorResponse {
+            success: false,
+            message: format!("Failed to create outreach batch: {e}"),
+        }),
     ))?;
 
     let mut sample_needed = 0usize;
