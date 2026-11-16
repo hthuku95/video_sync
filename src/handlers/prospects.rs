@@ -3836,7 +3836,8 @@ async fn bulk_send_prospect_emails(
 
     let mut sample_needed = 0usize;
     let mut sample_recent = 0usize;
-    for (id, name, email, _script, _service) in candidates {
+    let total_prospects = candidates.len();
+    for (id, name, email, _script, _service) in &candidates {
         let pid: Uuid = id;
         // Recent usable sample? (completed delivery for this prospect within 30 days)
         let recent: Option<(Uuid, String)> = sqlx::query_as(
@@ -3882,12 +3883,12 @@ async fn bulk_send_prospect_emails(
     Ok(Json(json!({
         "success": true,
         "batch_id": batch_id.to_string(),
-        "total": candidates.len(),
+        "total": total_prospects,
         "samples_to_generate": sample_needed,
         "samples_already_ready": sample_recent,
         "message": format!(
             "Outreach batch created: {} prospects. {} sample video(s) will be generated first (background lane); each email is sent automatically once its sample is ready. Progress: /admin/email-logs.",
-            candidates.len(), sample_needed
+            total_prospects, sample_needed
         ),
     })))
 }
