@@ -20,7 +20,7 @@ CREATE TABLE IF NOT EXISTS prospect_outreach_batches (
 CREATE TABLE IF NOT EXISTS prospect_outreach_items (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     batch_id UUID NOT NULL REFERENCES prospect_outreach_batches(id) ON DELETE CASCADE,
-    prospect_id INTEGER NOT NULL,
+    prospect_id UUID NOT NULL REFERENCES prospects(id) ON DELETE CASCADE,
     prospect_name VARCHAR(255) NOT NULL DEFAULT '',
     prospect_email VARCHAR(255) NOT NULL DEFAULT '',
     -- pending_sample | sample_generating | ready_to_send | email_sent | email_failed | skipped
