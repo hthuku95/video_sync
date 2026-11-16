@@ -778,15 +778,7 @@ async fn generate(
         .unwrap_or(None);
         consumed
     };
-
-    if !is_admin && consumed.is_none() {
-        return (
-            StatusCode::PAYMENT_REQUIRED,
-            Json(
-                json!({"success": false, "error": "No video credits remaining. Purchase a bundle to continue."}),
-            ),
-        );
-    }
+    // (non-admins with no credits already got the 402 inside the else branch)
 
     let product_name = req
         .product_name
