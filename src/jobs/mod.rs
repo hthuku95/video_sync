@@ -15,7 +15,6 @@ pub mod education_post_worker;
 pub mod token_refresh;
 pub mod video_job;
 
-
 /// Unique identifier for a background job
 pub type JobId = String;
 

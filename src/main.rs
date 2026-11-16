@@ -62,7 +62,6 @@ mod advanced;
 mod audio;
 mod core;
 mod export;
-mod manual_clipping_tests;
 mod portfolio_tests;
 mod transform;
 mod types;
@@ -76,7 +75,6 @@ pub struct AppState {
     pub vector_db: Option<vector_db::AstraDBClient>, // Keep for backward compatibility
     pub qdrant_client: Option<qdrant_client::QdrantClient>,
     pub gemini_client: Option<gemini_client::GeminiClient>, // Auto clipping pipeline only
-    pub manual_clipping_gemini_client: Option<gemini_client::GeminiClient>, // Manual clipping only
     pub video_gemini_client: Option<gemini_client::GeminiClient>, // Video editing, generation, agents, Blender MCP
     pub gemma_client: Option<gemini_client::GeminiClient>, // Gemma 4 via Google AI Studio (text tasks, own quota)
     pub bedrock_client: Option<std::sync::Arc<crate::bedrock_client::BedrockClient>>, // AWS Bedrock (Meta Llama 3.2 90B, open-source)
@@ -360,20 +358,9 @@ async fn main() {
             None
         }
     };
-
     // Dedicated Gemini client for manual clipping — uses a separate API key so
     // manual clipping jobs don't exhaust the quota shared with the auto-clipping pipeline.
     // Falls back to the primary key if MANUAL_CLIPPING_GEMINI_API_KEY is not set.
-    let manual_clipping_gemini_client = match std::env::var("MANUAL_CLIPPING_GEMINI_API_KEY").ok() {
-        Some(api_key) => {
-            tracing::info!("Initializing dedicated Gemini client for manual clipping...");
-            Some(gemini_client::GeminiClient::new(api_key))
-        }
-        None => {
-            tracing::warn!("MANUAL_CLIPPING_GEMINI_API_KEY not set — manual clipping will share the primary Gemini quota.");
-            None
-        }
-    };
 
     // Dedicated Gemini client for video editing, generation, agents, and Blender MCP.
     // Isolated so video workloads don't exhaust the auto-clipping quota.
@@ -791,7 +778,6 @@ async fn main() {
         vector_db,
         qdrant_client,
         gemini_client,
-        manual_clipping_gemini_client,
         video_gemini_client,
         gemma_client,
         bedrock_client,
@@ -895,11 +881,8 @@ async fn main() {
     // WORKER_MODE removed Nov 16 2026 — it existed only to run the legacy clipping
     // worker, which was DELETED with the legacy system (owner directive).
 
-
-
     // BATCH_MODE removed Nov 16 2026 — it processed legacy clipping queue messages
     // (MNS/SQS). Deleted with the legacy system (owner directive).
-
 
     // Admin-only routes
     let admin_only_routes = Router::new()

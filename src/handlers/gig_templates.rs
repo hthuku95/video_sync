@@ -7,8 +7,8 @@
 //   POST /api/gig-templates/:id/generate-sample — spawn sample render    (auth)
 //   DELETE /api/gig-samples/:id                — delete a sample         (auth)
 
-use crate::middleware::auth::auth_middleware;
 use crate::middleware::admin::admin_or_whitelisted_middleware;
+use crate::middleware::auth::auth_middleware;
 use crate::models::auth::Claims;
 use crate::AppState;
 use axum::{

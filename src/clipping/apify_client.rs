@@ -10,8 +10,6 @@ use tokio::io::AsyncWriteExt;
 use tokio::time::{sleep, Duration, Instant};
 
 // Import all downloader clients for 5-tier fallback system
-use crate::clipping::rust_yt_downloader_client::RustYtDownloaderClient;
-use crate::clipping::rustube_client::RustubeClient;
 use crate::clipping::rusty_ytdl_client::RustyYtdlClient;
 use crate::clipping::ytdlp_api_client::YtdlpApiClient;
 use crate::clipping::ytdlp_client::YtDlpClient;
@@ -413,32 +411,6 @@ impl ApifyClient {
             }
         } else {
             tracing::info!("⏭️ Skipping Strategy 3 (Apify) - circuit breaker open");
-        }
-
-        // STRATEGY 4: rustube (pure Rust, no external deps)
-        tracing::info!("🔄 Trying Strategy 4 (rustube - pure Rust)...");
-        match RustubeClient::download_video(video_url, output_path, r2_client, r2_key).await {
-            Ok(result) => {
-                tracing::info!("✅ Strategy 4 (rustube) succeeded");
-                return Ok(result);
-            }
-            Err(e) => {
-                tracing::warn!("⚠️ Strategy 4 (rustube) failed: {}", e);
-            }
-        }
-
-        // STRATEGY 5: rust-yt-downloader (feature-rich yt-dlp wrapper)
-        tracing::info!("🔄 Trying Strategy 5 (rust-yt-downloader)...");
-        match RustYtDownloaderClient::download_video(video_url, output_path, r2_client, r2_key)
-            .await
-        {
-            Ok(result) => {
-                tracing::info!("✅ Strategy 5 (rust-yt-downloader) succeeded");
-                return Ok(result);
-            }
-            Err(e) => {
-                tracing::warn!("⚠️ Strategy 5 (rust-yt-downloader) failed: {}", e);
-            }
         }
 
         // STRATEGY 6: rusty_ytdl (last resort, pure Rust)

@@ -8895,10 +8895,306 @@ pub async fn analytics_dashboard_page() -> Html<String> {
 
 // ============================================================================
 // Help & Guide Page (with dark theme + dynamic background)
-// (section removed Nov 14-16 2026 audit — legacy UI)
+// ============================================================================
 
-// (section removed Nov 14-16 2026 audit — legacy UI)
+pub async fn help_guide_page() -> Html<String> {
+    let html = r###"
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>📖 Help - VideoSync</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f1419 100%);
+            background-attachment: fixed;
+            transition: background-image 1s ease-in-out;
+            min-height: 100vh;
+            color: #e8e8e8;
+            padding: 20px;
+        }
 
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: rgba(26, 26, 46, 0.95);
+            backdrop-filter: blur(20px);
+            border-radius: 20px;
+            padding: 40px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.5);
+            border: 1px solid rgba(59, 130, 246, 0.3);
+        }
+
+        .nav-link { color: #3b82f6; text-decoration: none; font-weight: 600; display: inline-block; margin-bottom: 20px; }
+        h1 { color: #fff; font-size: 2.5rem; margin-bottom: 10px; }
+        .subtitle { color: #bdc3c7; margin-bottom: 30px; }
+
+        .toc {
+            background: rgba(255,255,255,0.05);
+            padding: 20px;
+            border-radius: 10px;
+            margin-bottom: 30px;
+            border: 1px solid rgba(59, 130, 246, 0.2);
+        }
+
+        .toc h3 { color: #3b82f6; margin-bottom: 15px; }
+        .toc a { display: block; color: #3b82f6; text-decoration: none; padding: 5px 0; transition: padding-left 0.2s; }
+        .toc a:hover { padding-left: 10px; }
+
+        .section { margin-bottom: 40px; }
+        .section h2 { color: #3b82f6; font-size: 1.8rem; margin-bottom: 15px; padding-bottom: 10px; border-bottom: 2px solid rgba(59, 130, 246, 0.3); }
+        .section h3 { color: #fff; font-size: 1.3rem; margin: 20px 0 10px; }
+        .section p { color: #bdc3c7; line-height: 1.8; margin-bottom: 15px; }
+        .section ul, .section ol { margin-left: 30px; color: #bdc3c7; line-height: 1.8; }
+        .section li { margin-bottom: 10px; }
+
+        .example-box {
+            background: rgba(59, 130, 246, 0.1);
+            border-left: 4px solid #3b82f6;
+            padding: 15px;
+            border-radius: 5px;
+            margin: 15px 0;
+            font-family: monospace;
+            color: #e8e8e8;
+        }
+
+        .warning-box {
+            background: rgba(255, 193, 7, 0.1);
+            border-left: 4px solid #ffc107;
+            padding: 15px;
+            border-radius: 5px;
+            margin: 15px 0;
+            color: #ffc107;
+        }
+
+        .success-box {
+            background: rgba(40, 167, 69, 0.1);
+            border-left: 4px solid #28a745;
+            padding: 15px;
+            border-radius: 5px;
+            margin: 15px 0;
+            color: #28a745;
+        }
+
+        .btn {
+            display: inline-block;
+            background: linear-gradient(135deg, #3b82f6, #1d4ed8);
+            color: white;
+            padding: 15px 30px;
+            border-radius: 25px;
+            text-decoration: none;
+            font-weight: 600;
+            margin: 5px;
+            transition: all 0.3s;
+        }
+
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 20px rgba(59, 130, 246, 0.3);
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <a href="/dashboard" class="nav-link">← Dashboard</a>
+        <h1>📖 Help & User Guide</h1>
+        <p class="subtitle">Complete guide to AI-powered video editing</p>
+
+        <div class="toc">
+            <h3>📑 Quick Links</h3>
+            <a href="#start">Getting Started</a>
+            <a href="#chat">AI Chat Commands</a>
+            <a href="#edit">Video Editing</a>
+            <a href="#workflows">Workflow Recipes</a>
+            <a href="#video-tools">Video Tools Page</a>
+            <a href="#youtube">YouTube Integration</a>
+            <a href="#ai">AI Tools</a>
+            <a href="#trouble">Troubleshooting</a>
+        </div>
+
+        <div class="section" id="start">
+            <h2>1. Getting Started</h2>
+            <h3>First Video Edit</h3>
+            <ol>
+                <li>Click <strong>Start New Chat</strong></li>
+                <li>Upload video file (📎 button)</li>
+                <li>Tell AI what you want</li>
+                <li>Download result!</li>
+            </ol>
+            <div class="example-box">
+"Make this black and white and add text Epic at 5 seconds"
+            </div>
+        </div>
+
+        <div class="section" id="chat">
+            <h2>2. AI Chat Commands</h2>
+            <div class="example-box">
+✂️ "Trim from 10 to 30 seconds"<br>
+🎨 "Apply vintage filter"<br>
+📝 "Add subtitles: Hello World"<br>
+🎬 "Merge video1.mp4 and video2.mp4"<br>
+📺 "Export for YouTube"
+            </div>
+        </div>
+
+        <div class="section" id="edit">
+            <h2>3. Professional Video Editing</h2>
+            <p style="background:#eef2ff;border-radius:8px;padding:12px 16px;font-size:14px;color:#1e40af"><strong>No 60-second cap.</strong> Unlike other AI video generators, VideoSync handles videos of any length — short clips to feature-length productions.</p>
+            <h3>Core Editing</h3>
+            <ul>
+                <li>Trim, Merge, Split, Resize, Crop, Rotate, Reverse, Loop</li>
+                <li>2-pass video stabilization (vid.stab)</li>
+                <li>Scene detection, black frame & silence detection</li>
+            </ul>
+            <h3>Visual Effects (100+ tools)</h3>
+            <ul>
+                <li>Color grading: LUT3D, curves, vibrance, HSV, hue/saturation</li>
+                <li>Cinematic: film grain, vignette, vintage curves, telecine</li>
+                <li>Keying: chroma key, luma key, color hold</li>
+                <li>Spatial: motion blur, glow, bloom, sharpen, denoise</li>
+                <li>Artistic: posterize (geq), solarize, CLAHE (histeq), banding fix</li>
+            </ul>
+            <h3>Audio Processing (80+ tools)</h3>
+            <ul>
+                <li>Loudness: EBU R128 / LUFS normalization, limiter (alimiter)</li>
+                <li>Cleanup: RNN denoiser, de-esser (deesser), speech normalizer</li>
+                <li>EQ: graphiceq, parametric eq, high/low shelf, bandpass</li>
+                <li>Dynamics: compressor, expander, gate, sidechaining</li>
+                <li>Visualize: CQT, spectrum analyzer, waveform video</li>
+            </ul>
+            <h3>Analysis (40+ tools)</h3>
+            <ul>
+                <li>Quality: VMAF, SSIM, PSNR</li>
+                <li>Inspection: bitrate, metadata, scene change, freeze frames</li>
+            </ul>
+            <div class="example-box">
+"Stabilize this shaky footage"<br>
+"Apply film grain and a vignette for a cinematic look"<br>
+"Normalize audio to -14 LUFS for YouTube"<br>
+"Remove background noise and de-ess the sibilance"<br>
+"Generate a CQT audio visualization"<br>
+"Convert to MKV"
+            </div>
+        </div>
+
+        <div class="section" id="workflows">
+            <h2>4. Workflow Recipes</h2>
+            <p>Named multi-step chains that apply several tools in sequence with a single command:</p>
+            <ul>
+                <li><strong>YouTube Ready Export</strong> — stabilize → normalize color → loudnorm −14 LUFS → yuv420p</li>
+                <li><strong>Podcast Cleanup</strong> — denoise → de-ess sibilance → limit peaks → loudnorm −16 LUFS</li>
+                <li><strong>Cinematic Grade</strong> — vintage curves → vibrance → vignette → film grain</li>
+                <li><strong>Talking Head Cleanup</strong> — stabilize → denoise speech → de-ess → loudnorm −16 LUFS</li>
+                <li><strong>GIF Creator</strong> — trim segment → scale → optimize palette</li>
+            </ul>
+            <div class="example-box">
+"Run the YouTube ready export workflow on my video"<br>
+"Apply podcast cleanup to this recording"<br>
+"Give it a cinematic grade"<br>
+"Create a GIF from seconds 10 to 15"
+            </div>
+        </div>
+
+        <div class="section" id="video-tools">
+            <h2>5. Video Tools Page</h2>
+            <p>For direct tool access without the AI chat, visit <a href="/video-tools" style="color:#3b82f6;">/video-tools</a>. It provides four interactive panels:</p>
+            <ul>
+                <li><strong>Stabilize</strong> — shakiness/smoothing/zoom sliders, runs 2-pass vid.stab</li>
+                <li><strong>Convert Format</strong> — dropdown of 11 output formats (mp4, mkv, webm, mov, wav, …)</li>
+                <li><strong>Audio Visualizer</strong> — waveform / spectrum / CQT video output</li>
+                <li><strong>Workflows</strong> — pick a recipe, enter file path, get a download link</li>
+            </ul>
+            <p>Enter the file path relative to <code>uploads/</code> (the filename shown after upload). A download link appears when processing completes.</p>
+        </div>
+
+        <div class="section" id="youtube">
+            <h2>6. YouTube Integration</h2>
+            <h3>Connect Channel</h3>
+            <ol>
+                <li>Go to <strong>Connect YouTube Channels</strong></li>
+                <li>Sign in with Google</li>
+                <li>Grant permissions</li>
+            </ol>
+            <h3>Features</h3>
+            <ul>
+                <li>Upload, Update metadata, Delete videos</li>
+                <li>Custom thumbnails, Playlists</li>
+                <li>Analytics, Comments, Captions</li>
+            </ul>
+            <div class="example-box">
+AI YouTube Tools:<br>
+"Optimize metadata for YouTube gaming"<br>
+"What's trending in tech?"<br>
+"Search for cooking channels"
+            </div>
+        </div>
+
+        <div class="section" id="ai">
+            <h2>7. AI Tools</h2>
+            <ul>
+                <li><strong>Stock Media:</strong> Free videos/photos from Pexels</li>
+                <li><strong>TTS:</strong> 17+ natural voices (75ms latency)</li>
+                <li><strong>Music:</strong> Studio-quality background tracks</li>
+                <li><strong>Sound FX:</strong> Custom sound effects</li>
+            </ul>
+        </div>
+
+        <div class="section" id="trouble">
+            <h2>8. Troubleshooting</h2>
+            <div class="warning-box">
+                <strong>Stuck "Connecting":</strong> Hard refresh (Ctrl+Shift+R)
+            </div>
+            <div class="warning-box">
+                <strong>YouTube Permissions:</strong> Reconnect at /youtube/connect
+            </div>
+            <div class="success-box">
+                <strong>Pro Tip:</strong> Be specific with commands for best results!
+            </div>
+        </div>
+
+        <div style="text-align: center; margin-top: 40px;">
+            <a href="/chat" class="btn">🎬 Start Editing</a>
+            <a href="/dashboard" class="btn">📊 Dashboard</a>
+        </div>
+    </div>
+
+    <script>
+        class DynamicBackgroundManager {
+            constructor() {
+                this.updateBackground();
+                setInterval(() => this.updateBackground(), 5 * 60 * 1000);
+            }
+            async updateBackground() {
+                try {
+                    const r = await fetch('/api/background/image');
+                    if (r.ok) {
+                        const blob = await r.blob();
+                        const url = URL.createObjectURL(blob);
+                        const o = document.createElement('div');
+                        o.style.cssText = `position:fixed;top:0;left:0;width:100%;height:100%;background-image:url(${url});background-size:cover;background-position:center;opacity:0;transition:opacity 1s;z-index:-1;pointer-events:none`;
+                        document.body.appendChild(o);
+                        setTimeout(() => o.style.opacity = '0.3', 100);
+                        setTimeout(() => {
+                            const old = document.querySelectorAll('div[style*="background-image"]');
+                            old.forEach((e, i) => { if (i < old.length - 1) e.remove(); });
+                        }, 1100);
+                    }
+                } catch (e) { console.error(e); }
+            }
+        }
+        new DynamicBackgroundManager();
+    </script>
+</body>
+</html>
+    "###;
+    Html(html.to_string())
+}
+// ============================================================================
+// YouTube Clipping Management Page
 // ============================================================================
 
 // (clipping_management_page removed Nov 14-16 2026 audit — legacy UI)
@@ -9334,8 +9630,8 @@ pub async fn terms_of_service_page() -> Html<String> {
     Html(html.to_string())
 }
 
-// (section removed Nov 14-16 2026 audit — legacy UI)
-
+// ============================================================================
+// Manual Clipping Dashboard
 // ============================================================================
 
 // (manual_clipping_page removed Nov 14-16 2026 audit — legacy UI)

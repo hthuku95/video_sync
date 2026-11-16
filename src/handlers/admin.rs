@@ -175,10 +175,7 @@ pub fn admin_routes() -> Router {
             "/api/admin/test/search-content",
             post(api_test_search_content),
         )
-        .route(
-            "/api/admin/manual-clipping-tests/trigger",
-            post(api_trigger_manual_clipping_test),
-        )
+        .route()
         .route(
             "/api/admin/reference-assets/normalize",
             post(api_normalize_reference_asset),
@@ -6833,37 +6830,7 @@ pub async fn api_trigger_test_run(
     }
 }
 
-pub async fn api_trigger_manual_clipping_test(
-    Extension(state): Extension<Arc<AppState>>,
-    axum::Json(body): axum::Json<TriggerTestRunRequest>,
-) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
-    let name = body.name.unwrap_or_else(|| {
-        format!(
-            "Manual Clipping test {}",
-            chrono::Utc::now().format("%Y-%m-%d %H:%M")
-        )
-    });
-
-    // Service switch: admin test renders (owner: the testing infrastructure is a
-    // core part of the system; the retired youtube_education_posting flag was
-    // deleted Nov 14 2026 — this endpoint belongs to admin_tests).
-    if !crate::services::service_flags::service_enabled(&state.db_pool, "admin_tests").await {
-        return Err((
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(json!({ "error": "Admin test renders are currently disabled (service_flags)." })),
-        ));
-    }
-
-    match crate::manual_clipping_tests::ManualClippingTestRunner::create_and_spawn(state, name)
-        .await
-    {
-        Ok(run_id) => Ok(Json(json!({ "run_id": run_id, "status": "running" }))),
-        Err(e) => Err((
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": e })),
-        )),
-    }
-}
+// (api_trigger_manual_clipping_test removed Nov 16 2026 — manual clipping deleted)
 
 pub async fn api_list_test_runs(
     Extension(state): Extension<Arc<AppState>>,
