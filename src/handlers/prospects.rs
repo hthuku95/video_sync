@@ -3838,7 +3838,7 @@ async fn bulk_send_prospect_emails(
     let mut sample_recent = 0usize;
     let total_prospects = candidates.len();
     for (id, name, email, _script, _service) in &candidates {
-        let pid: Uuid = id;
+        let pid: Uuid = *id;
         // Recent usable sample? (completed delivery for this prospect within 30 days)
         let recent: Option<(Uuid, String)> = sqlx::query_as(
             "SELECT d.id, d.output_r2_url FROM deliveries d
