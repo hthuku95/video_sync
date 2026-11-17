@@ -46,29 +46,6 @@ fn worker_count() -> usize {
         .unwrap_or(1)
 }
 
-/// Worker lane role (owner design Nov 16 2026): which workflow lane this
-/// deployment's claimers serve. WORKER_ROLE=background → the education-posting
-/// network + scheduled batches (vs-edu-worker). WORKER_ROLE=interactive →
-/// customer-watched flows: bundles, studio, admin tests (vs-worker-1).
-/// Validated at startup — invalid values refuse to boot rather than silently
-/// claiming the wrong lane.
-pub fn worker_lane() -> &'static str {
-    static LANE: std::sync::OnceLock<&'static str> = std::sync::OnceLock::new();
-    LANE.get_or_init(|| {
-        let raw = std::env::var("WORKER_ROLE")
-            .ok()
-            .map(|v| v.trim().to_ascii_lowercase())
-            .unwrap_or_else(|| "interactive".to_string());
-        match raw.as_str() {
-            "interactive" => "interactive",
-            "background" => "background",
-            other => {
-                panic!("Invalid WORKER_ROLE '{other}' — must be 'interactive' or 'background'")
-            }
-        }
-    })
-}
-
 fn lease_minutes() -> i32 {
     // Short lease: the 60s renewal ticker keeps it fresh; a short window means
     // fast crash detection. Must exceed one renewal interval comfortably.
@@ -102,17 +79,21 @@ fn max_run_hours() -> u64 {
 }
 
 /// Spawn the worker pool + supervisor. Called once from main.rs.
-pub fn start_pipeline_infrastructure(state: Arc<AppState>) {
+pub fn start_pipeline_infrastructure(state: Arc<AppState>, lane: &str) {
     let n = worker_count();
+    let lane_owned = lane.to_string();
     for i in 0..n {
         let worker_state = state.clone();
+        let lane_clone = lane_owned.clone();
         tokio::spawn(async move {
             tracing::info!(
-                "🏗️ agentic pipeline worker {i}/{} started (instance={})",
+                "🏗️ agentic pipeline worker {i}/{} started (lane={}, instance={})",
+                i,
                 n,
+                lane_owned,
                 instance_id()
             );
-            worker_loop(worker_state, i).await;
+            worker_loop(worker_state, i, &lane_clone).await;
         });
     }
 
@@ -171,13 +152,13 @@ async fn supervisor_sweep(state: &Arc<AppState>) {
     }
 }
 
-async fn worker_loop(state: Arc<AppState>, worker_idx: usize) {
+async fn worker_loop(state: Arc<AppState>, worker_idx: usize, lane: &str) {
     let poll = Duration::from_secs(poll_interval_secs());
     loop {
         let runtime = WorkflowRuntime::new(state.db_pool.clone());
 
         let claimed = match runtime
-            .claim_next_agentic_workflow(instance_id(), lease_minutes(), worker_lane())
+            .claim_next_agentic_workflow(instance_id(), lease_minutes(), lane)
             .await
         {
             Ok(c) => c,
