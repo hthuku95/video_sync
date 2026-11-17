@@ -881,23 +881,15 @@ async fn main() {
     // WORKER_MODE removed Nov 16 2026 — it existed only to run the legacy clipping
     // worker, which was DELETED with the legacy system (owner directive).
 
-    // ── Agentic pipeline infrastructure — claimers for the durable queue ────
-    // Lane assignment (owner design Nov 16 2026):
-    //   vs-edu-worker (EDUCATION_WORKER=true) → lane="background" — claims
-    //     education-posting network runs + future campaigns
-    //   vs-worker-1 (no EDUCATION_WORKER) → lane="interactive" — claims
-    //     bundles, studio, admin tests — customer-watched flows
-    //   vs-api-pro → ARW=0 (web server, no claimers)
-    // The AGENTIC_RENDER_WORKERS env controls how many claimers per instance.
+    // ── Agentic pipeline infrastructure — interactive-lane claimers ─────────
+    // The main server spawns interactive-lane claimers (bundles, studio,
+    // admin tests — customer-watched flows). The education-posting worker
+    // spawns its OWN background-lane claimers (see education_post_worker).
+    // No env-driven lane assignment — the lane is determined by which module
+    // spawns the claimers.
     {
         let pw_state = shared_state.clone();
-        let lane = if std::env::var("EDUCATION_WORKER").as_deref() == Ok("true") {
-            "background"
-        } else {
-            "interactive"
-        };
-        tracing::info!("🏗️ Pipeline infrastructure starting (lane={})", lane);
-        crate::services::pipeline_worker::start_pipeline_infrastructure(pw_state, lane);
+        crate::services::pipeline_worker::start_pipeline_infrastructure(pw_state, "interactive");
     }
 
     // BATCH_MODE removed Nov 16 2026 — it processed legacy clipping queue messages

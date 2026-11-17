@@ -58,6 +58,11 @@ const MAX_CONCURRENT_GENERATIONS: usize = 2;
 const MAX_JOBS_PER_CYCLE: usize = 4;
 
 pub async fn run_education_worker_loop(state: Arc<AppState>) {
+    // Spawn the background-lane claimers — this module OWNS the background
+    // lane. The claimers are spawned here (not by main.rs) so the lane
+    // selection is determined by the code that owns the work, not by env vars.
+    crate::services::pipeline_worker::start_pipeline_infrastructure(state.clone(), "background");
+
     tracing::info!(
         "🎓 Education-posting worker started (cycle: {}s, concurrency: {})",
         CYCLE_SECS,
