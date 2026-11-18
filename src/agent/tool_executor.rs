@@ -3160,6 +3160,29 @@ async fn execute_analyze_image_claude(args: &Value) -> String {
         _ => "Describe what you see in this image in detail.",
     };
 
+    // NIM-first (de-gemini-fication, Nov 18 2026): use the NIM vision model
+    // when configured; Gemini stays as the fallback.
+    if let Ok(nim_key) = std::env::var("NVIDIA_API_KEY")
+        .map(|k| k.trim().to_string())
+        .filter(|k| !k.is_empty())
+    {
+        let nim = crate::nvidia_nim_client::NvidiaNimClient::new_vision(nim_key);
+        let bytes = std::fs::read(image_path).unwrap_or_default();
+        if !bytes.is_empty() {
+            match nim.analyze_images_bytes(&[bytes], &prompt).await {
+                Ok(analysis) => {
+                    return format!(
+                        "🖼️ **Image Analysis: {}**\n\nType: {}\n\n{}",
+                        image_path, analysis_type, analysis
+                    );
+                }
+                Err(e) => {
+                    tracing::warn!("NIM image analysis failed, falling back to Gemini: {}", e);
+                }
+            }
+        }
+    }
+
     match gemini_client
         .analyze_video_content(image_path, Some(prompt.to_string()))
         .await
@@ -4408,6 +4431,29 @@ async fn execute_analyze_image_gemini(args: &HashMap<String, Value>) -> String {
         "colors" => "Analyze the color palette of this image, identifying dominant colors, color harmony, and mood created by the colors.",
         _ => "Describe what you see in this image in detail.",
     };
+
+    // NIM-first (de-gemini-fication, Nov 18 2026): use the NIM vision model
+    // when configured; Gemini stays as the fallback.
+    if let Ok(nim_key) = std::env::var("NVIDIA_API_KEY")
+        .map(|k| k.trim().to_string())
+        .filter(|k| !k.is_empty())
+    {
+        let nim = crate::nvidia_nim_client::NvidiaNimClient::new_vision(nim_key);
+        let bytes = std::fs::read(image_path).unwrap_or_default();
+        if !bytes.is_empty() {
+            match nim.analyze_images_bytes(&[bytes], &prompt).await {
+                Ok(analysis) => {
+                    return format!(
+                        "🖼️ **Image Analysis: {}**\n\nType: {}\n\n{}",
+                        image_path, analysis_type, analysis
+                    );
+                }
+                Err(e) => {
+                    tracing::warn!("NIM image analysis failed, falling back to Gemini: {}", e);
+                }
+            }
+        }
+    }
 
     match gemini_client
         .analyze_video_content(image_path, Some(prompt.to_string()))
@@ -9054,18 +9100,31 @@ async fn execute_review_video_with_state_claude(
     )
     .await;
 
-    let full_video_analysis = if let Some(gemini) = app_state
+    let full_video_analysis = if let Some(nim) = app_state.nvidia_nim_vision_client.as_ref() {
+        // NIM-first (de-gemini-fication, Nov 18 2026): frame-sample the video
+        // into the NIM vision model — no Gemini dependency.
+        match crate::render_review::nim_video_analysis_text(
+            nim,
+            &video_path,
+            "Summarize what this video shows.",
+        )
+        .await
+        {
+            Ok(desc) => desc.chars().take(500).collect::<String>(),
+            Err(e) => format!("Content analysis unavailable: {}", e),
+        }
+    } else if let Some(gemini) = app_state
         .video_gemini_client
         .as_ref()
         .or(app_state.gemini_client.as_ref())
     {
-        // Try Gemini full video analysis for rich content description
+        // Legacy fallback: Gemini full video analysis
         match gemini.analyze_video_content(&video_path, None).await {
             Ok(desc) => desc.chars().take(500).collect::<String>(),
             Err(e) => format!("Content analysis unavailable: {}", e),
         }
     } else {
-        "Content analysis unavailable (no Gemini client)".to_string()
+        "Content analysis unavailable (no NIM or Gemini client)".to_string()
     };
 
     review.push_str(&format!("**LLM Review (4-model chain):**\n"));
@@ -9238,17 +9297,31 @@ async fn execute_review_video_with_state_gemini(
     )
     .await;
 
-    let full_video_analysis = if let Some(gemini) = app_state
+    let full_video_analysis = if let Some(nim) = app_state.nvidia_nim_vision_client.as_ref() {
+        // NIM-first (de-gemini-fication, Nov 18 2026): frame-sample the video
+        // into the NIM vision model — no Gemini dependency.
+        match crate::render_review::nim_video_analysis_text(
+            nim,
+            &video_path,
+            "Summarize what this video shows.",
+        )
+        .await
+        {
+            Ok(desc) => desc.chars().take(500).collect::<String>(),
+            Err(e) => format!("Content analysis unavailable: {}", e),
+        }
+    } else if let Some(gemini) = app_state
         .video_gemini_client
         .as_ref()
         .or(app_state.gemini_client.as_ref())
     {
+        // Legacy fallback: Gemini full video analysis
         match gemini.analyze_video_content(&video_path, None).await {
             Ok(desc) => desc.chars().take(500).collect::<String>(),
             Err(e) => format!("Content analysis unavailable: {}", e),
         }
     } else {
-        "Content analysis unavailable (no Gemini client)".to_string()
+        "Content analysis unavailable (no NIM or Gemini client)".to_string()
     };
 
     review.push_str(&format!("**LLM Review (4-model chain):**\n"));

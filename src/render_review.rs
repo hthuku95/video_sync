@@ -1583,6 +1583,148 @@ fn audio_mime_type(ext: &str) -> Option<&'static str> {
     }
 }
 
+/// Reusable NIM video-content analysis via frame sampling (owner directive
+/// Nov 18 2026 — de-gemini-fication). Works on a local path OR a cloud URL;
+/// samples frames evenly with ffmpeg and sends them to the NIM vision
+/// model. Used by the review_video tool and any other full-video analysis
+/// that used to hard-require `GeminiClient::analyze_video_content`.
+pub async fn nim_video_analysis_text(
+    nim: &NvidiaNimClient,
+    source: &str,
+    prompt: &str,
+) -> Result<String, String> {
+    // Download remote artifacts to a temp file; local paths pass through.
+    let downloaded = if source.starts_with("http://") || source.starts_with("https://") {
+        Some(
+            download_to_temp(source)
+                .await
+                .map_err(|e| format!("video analysis download failed: {e}"))?
+                .ok_or("video analysis: artifact not found")?
+                .0,
+        )
+    } else {
+        None
+    };
+    let local_path: std::path::PathBuf = downloaded
+        .as_ref()
+        .map(|p| p.clone())
+        .unwrap_or_else(|| std::path::PathBuf::from(source));
+
+    let result = sample_frames_and_analyze(nim, &local_path, prompt).await;
+    if let Some(tmp) = downloaded {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    result
+}
+
+/// Sample frames evenly across a local video and analyze them with the NIM
+/// vision model. Shared by QA review and the review_video tool.
+async fn sample_frames_and_analyze(
+    nim: &NvidiaNimClient,
+    video_path: &std::path::Path,
+    prompt: &str,
+) -> Result<String, String> {
+    if !video_path.exists() {
+        return Err(format!("video file not found: {}", video_path.display()));
+    }
+    let temp_dir = std::env::temp_dir().join(format!("frames_{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&temp_dir).map_err(|e| format!("temp dir: {e}"))?;
+
+    // Probe duration for even sampling.
+    let probe = tokio::process::Command::new("ffprobe")
+        .args(["-v", "error", "-print_format", "json", "-show_format"])
+        .arg(video_path)
+        .output()
+        .await
+        .map_err(|e| format!("ffprobe failed: {e}"))?;
+    let json: serde_json::Value = serde_json::from_slice(&probe.stdout).unwrap_or_default();
+    let duration = json["format"]["duration"]
+        .as_str()
+        .and_then(|d| d.parse::<f64>().ok())
+        .unwrap_or(0.0);
+
+    let frame_pattern = temp_dir.join("frame_%02d.jpg");
+    let n_frames: u32 = 8;
+    let output = if duration > 1.0 {
+        let step = (duration / f64::from(n_frames)).max(0.5);
+        tokio::process::Command::new("ffmpeg")
+            .args(["-y", "-v", "error"])
+            .arg("-i")
+            .arg(video_path)
+            .arg("-vf")
+            .arg(format!("fps=1/{step},scale=640:-2"))
+            .arg("-frames:v")
+            .arg(n_frames.to_string())
+            .arg("-q:v")
+            .arg("3")
+            .arg(&frame_pattern)
+            .output()
+            .await
+    } else {
+        tokio::process::Command::new("ffmpeg")
+            .args(["-y", "-v", "error"])
+            .arg("-i")
+            .arg(video_path)
+            .arg("-vf")
+            .arg("fps=1,scale=640:-2")
+            .arg("-frames:v")
+            .arg(n_frames.to_string())
+            .arg("-q:v")
+            .arg("3")
+            .arg(&frame_pattern)
+            .output()
+            .await
+    };
+    let out = output.map_err(|e| format!("ffmpeg failed: {e}"))?;
+    if !out.status.success() {
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        return Err(format!(
+            "ffmpeg could not extract frames: {}",
+            String::from_utf8_lossy(&out.stderr)
+                .chars()
+                .take(200)
+                .collect::<String>()
+        ));
+    }
+
+    let mut frames: Vec<Vec<u8>> = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(&temp_dir) {
+        let mut paths: Vec<_> = entries
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| {
+                p.extension()
+                    .and_then(|x| x.to_str())
+                    .map(|x| x.eq_ignore_ascii_case("jpg"))
+                    .unwrap_or(false)
+            })
+            .collect();
+        paths.sort();
+        for p in paths {
+            if let Ok(bytes) = std::fs::read(&p) {
+                frames.push(bytes);
+            }
+        }
+    }
+    if frames.is_empty() {
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        return Err("no frames could be extracted".into());
+    }
+
+    let n = frames.len();
+    let full_prompt = format!(
+        "The {n} attached images are frames sampled evenly across one video. \
+Analyze the video as a whole: overall content, narrative arc, scene changes, \
+text/graphics present, visual style, and anything notable. {prompt}"
+    );
+    let analysis = nim
+        .analyze_images_bytes(&frames, &full_prompt)
+        .await
+        .map_err(|e| format!("NIM vision analysis failed: {e}"))?;
+    let _ = std::fs::remove_dir_all(&temp_dir);
+    Ok(analysis)
+}
+
 /// Append the review to the audit table. Non-fatal — logging only.
 async fn persist_review(
     state: &Arc<AppState>,
