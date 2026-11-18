@@ -125,7 +125,7 @@ impl QdrantClient {
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         let mut client_builder = Qdrant::from_url(&url);
 
-        if let Some(key) = api_key {
+        if let Some(key) = api_key.clone() {
             client_builder = client_builder.api_key(key);
         }
 

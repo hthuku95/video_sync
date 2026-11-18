@@ -3726,6 +3726,7 @@ async fn bulk_send_prospect_emails(
         fresh_days: None,
         include_contacted: Some(false),
         limit: None,
+        mode: None,
     });
 
     // Build the candidate list. Whitelisted (non-admin) users are scoped to
