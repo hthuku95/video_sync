@@ -3888,7 +3888,14 @@ async fn bulk_send_prospect_emails(
         let (status, delivery_id, sample_url) = match recent {
             Some((did, url)) => {
                 sample_recent += 1;
-                ("ready_to_send", Some(did), Some(url))
+                // Samples-only batches stop at 'sample_ready' — never
+                // 'ready_to_send' (which the full-mode worker emails).
+                let st = if req.is_samples_only() {
+                    "sample_ready"
+                } else {
+                    "ready_to_send"
+                };
+                (st, Some(did), Some(url))
             }
             None => {
                 sample_needed += 1;

@@ -61,7 +61,7 @@ async fn process_one_item(state: &Arc<AppState>) -> Result<bool, String> {
                AND (
                  i.status = 'pending_sample'
                  OR (i.status = 'sample_generating' AND i.updated_at < NOW() - INTERVAL '10 minutes')
-                 OR (i.status = 'ready_to_send')
+                 OR (i.status = 'ready_to_send' AND b.mode = 'full')
                )
              ORDER BY i.created_at ASC
              FOR UPDATE OF i SKIP LOCKED
@@ -101,8 +101,25 @@ async fn process_one_item(state: &Arc<AppState>) -> Result<bool, String> {
     .await
     .unwrap_or_else(|_| "full".to_string());
 
-    // 2. Email send (full mode only — 'sending' status).
+    // 2. Email send (full mode ONLY — hard check; a samples-only batch must
+    //    never email, even if an item ends up 'ready_to_send' via a legacy
+    //    path). Owner directive Nov 18 2026.
     if status_now == "sending" {
+        if batch_mode != "full" {
+            // Convert to the samples-only terminal state — no email.
+            sqlx::query(
+                "UPDATE prospect_outreach_items SET status='sample_ready', updated_at=NOW() WHERE id=$1",
+            )
+            .bind(item_id)
+            .execute(&state.db_pool)
+            .await
+            .map_err(|e| format!("item update failed: {e}"))?;
+            tracing::warn!(
+                "🛡️ samples-only batch {batch_id}: item {item_id} was ready_to_send — converted to sample_ready, no email sent"
+            );
+            maybe_complete_batch(state, batch_id).await;
+            return Ok(true);
+        }
         return send_email_for_item(
             state,
             item_id,
