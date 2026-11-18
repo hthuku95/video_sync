@@ -314,7 +314,11 @@ impl AgenticServicePipeline {
                     "duration": input.duration_seconds,
                     "input": input_snapshot,
                 }),
-                lane: if input.lane == "background" { "background".to_string() } else { "interactive".to_string() },
+                lane: if input.lane == "background" {
+                    "background".to_string()
+                } else {
+                    "interactive".to_string()
+                },
                 artifact_requirements: json!({
                     "expects_video": service_type.expects_video(),
                     "expects_image": service_type.expects_image(),

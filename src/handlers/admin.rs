@@ -7793,27 +7793,42 @@ async fn delivery_page(
             };
 
             let feedback_html = if workflow_id.is_some() {
-                format!(
-                    r#"<div class="feedback-box" style="margin-top:16px;padding:16px;background:#12121a;border:1px solid #2a2a36;border-radius:10px;">
+                // Feedback form (owner directive Nov 10 2026). Uses string
+                // replacement instead of format! to avoid brace conflicts
+                // with the JavaScript inside the script tag.
+                let template = r#"<div class="feedback-box" style="margin-top:16px;padding:16px;background:#12121a;border:1px solid #2a2a36;border-radius:10px;">
   <div style="font-size:13px;color:#9999bb;margin-bottom:8px;">Send a note to the producer (applied on the next render attempt):</div>
   <div style="display:flex;gap:8px;">
     <input id="fb-input" type="text" placeholder="e.g. make the captions bigger, shorter intro..." style="flex:1;padding:8px 12px;border-radius:8px;border:1px solid #2a2a36;background:#1a1a24;color:#e0e0e0;font-size:14px;">
     <button type="button" onclick="sendFeedback()" style="padding:8px 16px;border-radius:8px;border:0;background:#6366f1;color:#fff;font-weight:600;cursor:pointer;">Send</button>
   </div>
   <div id="fb-status" style="font-size:12px;color:#6366f1;margin-top:6px;"></div>
-</div>"#,
-                    id = id
-                )
+</div>
+<script>
+function sendFeedback(){
+  const inp = document.getElementById('fb-input');
+  const msg = inp.value.trim();
+  if(!msg) return;
+  const st = document.getElementById('fb-status');
+  st.textContent = 'Sending...';
+  fetch('__DELIVERY_ID__/feedback', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({message: msg})})
+    .then(r=>r.json()).then(d=>{
+      if(d.success){ st.textContent='Note saved — will be applied on the next render attempt.'; inp.value=''; }
+      else { st.textContent='Error: '+(d.error||'failed'); }
+    }).catch(()=>{ st.textContent='Network error'; });
+}
+</script>"#;
+                template.replace("__DELIVERY_ID__", &format!("/delivery/{}", id))
             } else {
                 String::new()
             };
 
             // PROGRESS POLLING (owner directive Nov 10 2026) — ALWAYS included for
-            // non-completed deliveries, independent of workflow_id. The progress
-            // endpoint reads the delivery status directly.
-            let progress_html = if status.ne_ignore_ascii_case("completed") {
-                format!(
-                    r#"<script>
+            // non-completed deliveries, independent of workflow_id. Uses string
+            // replacement instead of format! to avoid brace conflicts with the
+            // JavaScript code.
+            let progress_html = if !status.eq_ignore_ascii_case("completed") {
+                let template = r#"<script>
 (function() {
   const bar = document.createElement('div');
   bar.style.cssText = 'margin:14px 0 4px;height:10px;border-radius:999px;background:rgba(148,163,184,0.18);overflow:hidden';
@@ -7833,7 +7848,7 @@ async fn delivery_page(
   let done = false;
   async function pollProgress(){
     try{
-      const res = await fetch('/delivery/<built-in function id>/progress?explain=1');
+      const res = await fetch('__DELIVERY_ID__/progress?explain=1');
       const d = await res.json();
       if(!d.success) return;
       fill.style.width = Math.max(4, Math.min(100, d.progress_pct || 0)) + '%';
@@ -7853,9 +7868,8 @@ async fn delivery_page(
   }
   pollProgress();
 })();
-</script>"#,
-                    id = id
-                )
+</script>"#;
+                template.replace("__DELIVERY_ID__", &format!("/delivery/{}", id))
             } else {
                 String::new()
             };
@@ -8707,6 +8721,7 @@ pub async fn api_create_delivery(
         idempotency_key: Some(format!("delivery-agentic:{delivery_id}")),
         reference_images: vec![],
         nim_profile: None,
+        lane: "interactive".to_string(),
     };
     let workflow_id = match crate::services::AgenticServicePipeline::start(
         state.clone(),
@@ -9163,6 +9178,7 @@ pub async fn api_generate_dfy_portfolio_samples(
             idempotency_key: Some(format!("portfolio-dfy:{}", service.slug)),
             reference_images: vec![],
             nim_profile: None,
+            lane: "interactive".to_string(),
         };
         let slug = service.slug;
 
@@ -9653,6 +9669,7 @@ pub async fn api_generate_service_portfolio_sample(
                     idempotency_key: Some(format!("service-sample:{}", slug)),
                     reference_images: vec![],
                     nim_profile: None,
+                    lane: "interactive".to_string(),
                 };
 
                 match crate::services::AgenticServicePipeline::start(
@@ -10485,6 +10502,7 @@ pub async fn ensure_delivery_workflow(
                 "gig_type": gig_type,
                 "prompt_preview": prompt.chars().take(240).collect::<String>(),
             }),
+            lane: "interactive".to_string(),
             artifact_requirements: serde_json::json!([
                 {
                     "kind": "delivery_output",

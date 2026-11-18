@@ -81,19 +81,19 @@ fn max_run_hours() -> u64 {
 /// Spawn the worker pool + supervisor. Called once from main.rs.
 pub fn start_pipeline_infrastructure(state: Arc<AppState>, lane: &str) {
     let n = worker_count();
-    let lane_owned = lane.to_string();
+    let lane = lane.to_string();
     for i in 0..n {
         let worker_state = state.clone();
-        let lane_clone = lane_owned.clone();
+        let lane = lane.clone();
         tokio::spawn(async move {
             tracing::info!(
-                "🏗️ agentic pipeline worker {i}/{} started (lane={}, instance={})",
+                "🏗️ agentic pipeline worker {}/{} started (lane={}, instance={})",
                 i,
                 n,
-                lane_owned,
+                lane,
                 instance_id()
             );
-            worker_loop(worker_state, i, &lane_clone).await;
+            worker_loop(worker_state, i, &lane).await;
         });
     }
 
