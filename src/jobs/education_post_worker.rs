@@ -518,6 +518,23 @@ async fn execute_job_inner(
     .map_err(|_| "output download timed out (10 min)".to_string())?
     .map_err(|e| format!("output download failed: {e}"))?;
 
+    // UPLOAD-BOUNDARY BACKSTOP (Nov 18 2026): never send an audio-only file
+    // to YouTube. 20 education renders were published as narration-only
+    // audio through publish_output (ext-gated validation hole). Defense in
+    // depth: verify the resolved artifact actually has a video stream.
+    {
+        let meta = crate::core::analyze_video(video_path.to_str().unwrap_or("")).ok();
+        if let Some(m) = &meta {
+            if !m.has_video {
+                let _ = tokio::fs::remove_file(&video_path).await;
+                return Err(format!(
+                    "REFUSING YouTube upload: resolved deliverable has NO video stream (duration {:.1}s). The generation pipeline published audio-only — regeneration required.",
+                    m.duration_seconds
+                ));
+            }
+        }
+    }
+
     let access_token = fresh_channel_token(&state, channel_id).await?;
     let yt_title = format!("{} | {}", topic, title);
     let yt_title = yt_title.chars().take(95).collect::<String>();

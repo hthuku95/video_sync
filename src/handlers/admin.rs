@@ -68,7 +68,8 @@ pub fn admin_routes() -> Router {
         .route("/admin/how-it-works", get(admin_how_it_works_page))
         .route("/admin/service-samples", get(admin_service_samples_page))
         .route("/admin/campaigns", get(admin_campaigns_page))
-        .route("/admin/zernio", get(admin_zernio_page));
+        .route("/admin/zernio", get(admin_zernio_page))
+        .route("/admin/showcase", get(admin_showcase_page));
 
     // Protected routes — API + admin HTML, all behind auth + admin middleware.
     // Middleware wraps the entire merged router, so it applies to all routes.
@@ -256,6 +257,11 @@ pub fn admin_routes() -> Router {
             post(admin_remove_superuser),
         )
         .route("/api/admin/create-superuser", post(create_superuser_api))
+        .route("/api/admin/showcase/scenes", get(api_admin_showcase_scenes))
+        .route(
+            "/api/admin/showcase/download",
+            get(api_admin_showcase_download),
+        )
         .layer(axum::middleware::from_fn(superuser_middleware))
         .layer(axum::middleware::from_fn(auth_middleware));
 
@@ -13963,4 +13969,236 @@ pub fn payment_method_routes() -> axum::Router {
         "/api/payment-methods",
         axum::routing::get(api_list_payment_methods_public),
     )
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Showcase admin (Nov 18 2026, owner request): download the marketing scene
+// clips + full renders for manual posting to social platforms and freelancing
+// sites (studio.videosync.ink marketing). Admin-only page + JSON + download.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const SHOWCASE_PAGE_STYLE: &str = r#"
+  body { font-family: Inter, system-ui, sans-serif; background: #0b0b14; color: #eef0ff; margin: 0; padding: 32px; }
+  h1 { font-weight: 800; letter-spacing: -0.02em; margin: 0 0 4px; }
+  p.sub { color: #a5a8c1; margin: 0 0 28px; }
+  .grid { display: grid; gap: 16px; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); }
+  .card { background: #141420; border: 1px solid rgba(238,240,255,0.12); border-radius: 14px; overflow: hidden; }
+  .card video { width: 100%; display: block; aspect-ratio: 9/14; object-fit: cover; background: #000; }
+  .card.landscape video { aspect-ratio: 16/9; }
+  .card .meta { padding: 10px 12px; }
+  .card .meta .t { font-size: 13px; font-weight: 600; margin-bottom: 8px; }
+  .btn { display: inline-block; padding: 7px 14px; border-radius: 8px; background: #6366f1; color: #fff;
+         text-decoration: none; font-size: 13px; font-weight: 600; margin-right: 6px; }
+  .btn.ghost { background: transparent; border: 1px solid rgba(238,240,255,0.25); }
+  section { margin-bottom: 40px; }
+  section h2 { font-weight: 700; font-size: 20px; margin: 0 0 4px; }
+"#;
+
+async fn showcase_scene_cards(state: &Arc<AppState>) -> String {
+    let manifest = crate::handlers::showcase::load_manifest_public(state).await;
+    let mut cards = String::new();
+    for s in &manifest {
+        let key = s.get("key").and_then(|k| k.as_str()).unwrap_or_default();
+        let title = s.get("title").and_then(|t| t.as_str()).unwrap_or(key);
+        let orientation = s
+            .get("orientation")
+            .and_then(|o| o.as_str())
+            .unwrap_or("portrait");
+        let theme = s.get("theme").and_then(|t| t.as_str()).unwrap_or("");
+        let landscape_class = if orientation == "landscape" {
+            " landscape"
+        } else {
+            ""
+        };
+        cards.push_str(&format!(
+            r#"<div class="card{lc}">
+  <video src="/api/admin/showcase/download?key={key}" muted loop playsinline preload="metadata"></video>
+  <div class="meta">
+    <div class="t">{title}</div>
+    <a class="btn" href="/api/admin/showcase/download?key={key}&dl=1" download>Download</a>
+    <a class="btn ghost" href="/api/admin/showcase/download?key={key}" target="_blank">Preview</a>
+  </div>
+  <div style="padding:0 12px 12px; color:#6f7391; font-size:11px;">{theme} · {orientation}</div>
+</div>"#,
+            lc = landscape_class,
+            key = urlencoding_or_raw(key),
+            title = html_escape(title),
+            theme = html_escape(theme),
+            orientation = orientation,
+        ));
+    }
+    cards
+}
+
+fn urlencoding_or_raw(s: &str) -> String {
+    s.to_string()
+}
+
+fn html_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+}
+
+/// GET /admin/showcase — admin page with every showcase scene + full render,
+/// inline previews and one-click downloads (for social/freelance posting).
+pub async fn admin_showcase_page(Extension(state): Extension<Arc<AppState>>) -> Html<String> {
+    // Full renders (auto-enriching list of B2-hosted completed deliveries)
+    let mut video_cards = String::new();
+    if let Ok(rows) = sqlx::query(
+        "SELECT id, title, gig_type, output_r2_url FROM deliveries \
+         WHERE status='completed' AND output_r2_url LIKE '%backblazeb2%' \
+         ORDER BY created_at DESC LIMIT 24",
+    )
+    .fetch_all(&state.db_pool)
+    .await
+    {
+        for row in rows {
+            let id: Uuid = row.get("id");
+            let title: String = row.get("title");
+            let gig: String = row.get("gig_type");
+            let stored: String = row.get("output_r2_url");
+            let Some(key) = fallback_key_from_stored_url(&stored) else {
+                continue;
+            };
+            video_cards.push_str(&format!(
+                r#"<div class="card landscape">
+  <video src="/api/admin/showcase/download?key={key}" muted loop playsinline preload="metadata" controls></video>
+  <div class="meta">
+    <div class="t">{title}</div>
+    <a class="btn" href="/api/admin/showcase/download?key={key}&dl=1" download="{fname}">Download</a>
+    <a class="btn ghost" href="/delivery/{id}" target="_blank">Delivery page</a>
+  </div>
+  <div style="padding:0 12px 12px; color:#6f7391; font-size:11px;">{gig}</div>
+</div>"#,
+                key = key,
+                title = html_escape(&title),
+                fname = html_escape(&format!("{}.mp4", title.replace(' ', '_'))),
+                id = id,
+                gig = html_escape(&gig),
+            ));
+        }
+    }
+
+    let scenes_html = showcase_scene_cards(&state).await;
+    Html(format!(
+        r#"<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"><title>Showcase — Admin</title>
+<style>{style}</style></head>
+<body>
+<h1>Showcase media</h1>
+<p class="sub">Marketing scene clips + full renders from the B2 fallback bucket. Download for social/freelance posting (studio.videosync.ink marketing).</p>
+<section><h2>Scene clips ({n_scenes})</h2><div class="grid">{scenes}</div></section>
+<section><h2>Full renders ({n_vids})</h2><div class="grid">{videos}</div></section>
+</body></html>"#,
+        style = SHOWCASE_PAGE_STYLE,
+        n_scenes = {
+            // count roughly for the heading
+            scenes_html.matches("class=\"card").count()
+        },
+        scenes = scenes_html,
+        n_vids = video_cards.matches("class=\"card").count(),
+        videos = video_cards,
+    ))
+}
+
+fn fallback_key_from_stored_url(stored: &str) -> Option<String> {
+    let bucket = std::env::var("S3_FALLBACK_BUCKET").unwrap_or_default();
+    let marker = format!("{bucket}/");
+    let pos = stored.find(&marker)?;
+    let rest = &stored[pos + marker.len()..];
+    let key = rest.split('?').next().unwrap_or(rest);
+    Some(key.to_string())
+}
+
+/// GET /api/admin/showcase/download?key=... — admin-only. Streams the object
+/// from the fallback bucket; `?dl=1` forces a download attachment. The key
+/// must be a `portfolio_scenes/*` object or a stored output of a completed
+/// delivery — arbitrary keys are refused.
+pub async fn api_admin_showcase_download(
+    Extension(state): Extension<Arc<AppState>>,
+    Query(params): Query<std::collections::HashMap<String, String>>,
+) -> Response {
+    let Some(key) = params.get("key") else {
+        return (StatusCode::BAD_REQUEST, "missing ?key").into_response();
+    };
+    let allowed = key.starts_with("portfolio_scenes/") || {
+        // allow keys that belong to a completed delivery's stored output
+        sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM deliveries WHERE status='completed' AND output_r2_url LIKE $1",
+        )
+        .bind(format!("%{key}%"))
+        .fetch_one(&state.db_pool)
+        .await
+        .unwrap_or(0)
+            > 0
+    };
+    if !allowed {
+        return (StatusCode::FORBIDDEN, "key not in showcase scope").into_response();
+    }
+    let Some(router) = state.r2_client.as_ref() else {
+        return (StatusCode::SERVICE_UNAVAILABLE, "storage not configured").into_response();
+    };
+    let tmp = format!(
+        "{}/vs_showcase_dl_{}",
+        std::env::temp_dir().display(),
+        uuid::Uuid::new_v4()
+    );
+    if let Err(e) = router.download(key, &tmp).await {
+        let _ = std::fs::remove_file(&tmp);
+        return (StatusCode::NOT_FOUND, format!("download failed: {e}")).into_response();
+    }
+    let bytes = match tokio::fs::read(&tmp).await {
+        Ok(b) => b,
+        Err(e) => {
+            let _ = std::fs::remove_file(&tmp);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("read failed: {e}"),
+            )
+                .into_response();
+        }
+    };
+    let _ = std::fs::remove_file(&tmp);
+
+    let fname = key.rsplit('/').next().unwrap_or("showcase.mp4").to_string();
+    let mut resp = Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, "video/mp4");
+    if params.get("dl").map(|v| v == "1").unwrap_or(false) {
+        resp = resp.header(
+            header::CONTENT_DISPOSITION,
+            format!("attachment; filename=\"{fname}\""),
+        );
+    }
+    resp.body(Body::from(bytes))
+        .unwrap_or_else(|_| (StatusCode::INTERNAL_SERVER_ERROR, "body error").into_response())
+}
+
+/// GET /api/admin/showcase/scenes — admin JSON: manifest + presigned URLs.
+pub async fn api_admin_showcase_scenes(
+    Extension(state): Extension<Arc<AppState>>,
+) -> Json<serde_json::Value> {
+    let Some(router) = state.r2_client.as_ref() else {
+        return Json(json!({"success": false, "error": "storage not configured"}));
+    };
+    let manifest = crate::handlers::showcase::load_manifest_public(&state).await;
+    let mut scenes = Vec::with_capacity(manifest.len());
+    for s in &manifest {
+        let Some(key) = s.get("key").and_then(|k| k.as_str()) else {
+            continue;
+        };
+        match router.presign_get(key, 7 * 24 * 3600).await {
+            Ok(url) => {
+                let mut item = s.clone();
+                if let Some(obj) = item.as_object_mut() {
+                    obj.insert("url".to_string(), serde_json::Value::String(url));
+                }
+                scenes.push(item);
+            }
+            Err(_) => continue,
+        }
+    }
+    Json(json!({"success": true, "scenes": scenes}))
 }

@@ -1046,10 +1046,32 @@ impl AgenticServicePipeline {
             // incident published 4 empty MP4s to paying campaign slots.
             // Videos smaller than this are garbage by construction.
             let ext = final_path.rsplit('.').next().unwrap_or("").to_lowercase();
-            if matches!(ext.as_str(), "mp4" | "mov" | "mkv" | "webm" | "avi") {
+            if matches!(
+                ext.as_str(),
+                "mp4" | "mov" | "mkv" | "webm" | "avi" | "mp3" | "wav" | "m4a"
+            ) {
+                // ── VIDEO-STREAM BACKSTOP (Nov 18 2026) ──
+                // 20 education renders were published as narration-only audio
+                // files (ffprobe: codec=mp3, zero video stream) under .mp4
+                // keys. The audio backstop below can't catch them (an audio
+                // file trivially "has audio"). A final video deliverable MUST
+                // have a video stream — refuse and let the workflow retry.
+                let meta = crate::core::analyze_video(&final_path).ok();
+                if let Some(m) = &meta {
+                    if !m.has_video {
+                        let msg = format!(
+                            "ARTIFACT_INVALID: final deliverable has NO video stream ({} — duration {:.1}s, {} bytes). The visual render step did not run. Re-run the hyperframes render then add_audio before export_video.",
+                            final_path, m.duration_seconds,
+                            tokio::fs::metadata(&final_path).await.map(|x| x.len()).unwrap_or(0)
+                        );
+                        tracing::error!("publish_output: {}", msg);
+                        return Err(msg);
+                    }
+                }
                 let min_bytes: u64 = std::env::var("ARTIFACT_MIN_BYTES")
                     .ok()
-                    .and_then(|v| v.parse().ok())
+                    .and_then(|v| v.parse::<usize>().ok())
+                    .map(|v| v as u64)
                     .unwrap_or(50_000);
                 let size = tokio::fs::metadata(&final_path)
                     .await

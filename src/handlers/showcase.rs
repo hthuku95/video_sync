@@ -78,6 +78,11 @@ fn percent_decode(s: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
+/// Public accessor for the admin showcase page (same 1h cache).
+pub async fn load_manifest_public(state: &Arc<AppState>) -> Vec<Value> {
+    load_manifest(state).await
+}
+
 async fn load_manifest(state: &Arc<AppState>) -> Vec<Value> {
     let mut cache = manifest_cache().lock().await;
     if let Some((at, scenes)) = cache.as_ref() {
