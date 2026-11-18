@@ -3803,7 +3803,13 @@ async fn bulk_send_prospect_emails(
     for r in rows {
         let id: uuid::Uuid = r.get("id");
         let name: String = r.get("display_name");
-        let email: String = r.get("business_email");
+        // business_email can be NULL in samples-only mode (the query no longer
+        // filters on it) — r.get::<String> would panic on NULL → 502.
+        let email: String = r
+            .try_get::<Option<String>, _>("business_email")
+            .ok()
+            .flatten()
+            .unwrap_or_default();
         let script: Option<String> = r.get("email_script");
         let service: String = r
             .get::<Option<String>, _>("service_type")
