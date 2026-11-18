@@ -7679,10 +7679,14 @@ async fn delivery_page(
                     None => None,
                 };
                 let f: Option<String> = row.try_get("output_filename").ok();
+                // workflow_id is a UUID column — decoding it as String fails
+                // silently, which used to hide the feedback form from every
+                // delivery page (Nov 17 owner bug report).
                 let wf: Option<String> = row
-                    .try_get::<Option<String>, _>("workflow_id")
+                    .try_get::<Option<uuid::Uuid>, _>("workflow_id")
                     .ok()
-                    .flatten();
+                    .flatten()
+                    .map(|u| u.to_string());
 
                 // Build clip gallery from extra_args.clip_keys
                 if let Ok(Some(extra)) = row.try_get::<Option<serde_json::Value>, _>("extra_args") {
