@@ -21070,14 +21070,20 @@ pub(crate) async fn execute_vectorize_crawled_content_inner(
         Some(q) => q,
         None => return "Error: Qdrant not configured".to_string(),
     };
-    let gemini = match app_state
+    // DE-GEMINI-FICATION (owner directive Nov 18 2026): crawl vectorization no
+    // longer hard-requires Gemini. Provider order:
+    //   1. Voyage (1024) — primary, healthy, already the chat-memory backbone
+    //   2. NVIDIA nemotron (2048) — rides the healthy NIM keys
+    //   3. Gemini (1536 gemini_mm) — legacy fallback, only if both above die
+    let voyage = app_state.voyage_embeddings.as_ref();
+    let nim = app_state.nvidia_nim_client.as_ref();
+    let gemini = app_state
         .video_gemini_client
         .as_ref()
-        .or(app_state.gemini_client.as_ref())
-    {
-        Some(g) => g,
-        None => return "Error: Gemini client not configured for embeddings".to_string(),
-    };
+        .or(app_state.gemini_client.as_ref());
+    if voyage.is_none() && nim.is_none() && gemini.is_none() {
+        return "Error: no embedding provider configured (need Voyage, NIM, or Gemini)".to_string();
+    }
 
     let mut stored = 0usize;
     let mut errors = Vec::new();
@@ -21106,19 +21112,51 @@ pub(crate) async fn execute_vectorize_crawled_content_inner(
             serde_json::json!(chrono::Utc::now().to_rfc3339()),
         );
 
-        match qdrant
-            .store_chat_memory_with_gemini2(
-                feature_tag,
-                None,
-                &embed_text,
-                url,
-                vec![],
-                context,
-                gemini,
-                Some(feature_tag),
-            )
-            .await
-        {
+        let store_result: Result<String, String> = if let Some(v) = voyage {
+            qdrant
+                .store_crawled_page_with_voyage(
+                    feature_tag,
+                    &embed_text,
+                    url,
+                    title,
+                    context.clone(),
+                    v,
+                    Some(feature_tag),
+                )
+                .await
+                .map_err(|e| e.to_string())
+        } else if let Some(n) = nim {
+            qdrant
+                .store_crawled_page_with_nvidia(
+                    feature_tag,
+                    &embed_text,
+                    url,
+                    title,
+                    context.clone(),
+                    n,
+                    Some(feature_tag),
+                )
+                .await
+                .map_err(|e| e.to_string())
+        } else if let Some(g) = gemini {
+            qdrant
+                .store_chat_memory_with_gemini2(
+                    feature_tag,
+                    None,
+                    &embed_text,
+                    url,
+                    vec![],
+                    context.clone(),
+                    g,
+                    Some(feature_tag),
+                )
+                .await
+                .map_err(|e| e.to_string())
+        } else {
+            Err("no embedding provider".to_string())
+        };
+
+        match store_result {
             Ok(_) => stored += 1,
             Err(e) => errors.push(format!("{}: {}", url, e)),
         }
@@ -21185,74 +21223,144 @@ pub(crate) async fn execute_search_crawled_content_inner(
         Some(q) => q,
         None => return "Error: Qdrant not configured".to_string(),
     };
-    let gemini = match app_state
-        .video_gemini_client
-        .as_ref()
-        .or(app_state.gemini_client.as_ref())
-    {
-        Some(g) => g,
-        None => return "Error: Gemini client not configured for embeddings".to_string(),
-    };
 
-    let embedding = match gemini
-        .embed_content_with_model(query, "models/gemini-embedding-2", Some(1536))
-        .await
-    {
-        Ok(emb) => emb,
-        Err(e) => return format!("Error embedding query: {e}"),
-    };
-
+    // DE-GEMINI-FICATION (owner directive Nov 18 2026): search in provider
+    // order Voyage → NVIDIA → Gemini(gemini_mm). Pages stored before the swap
+    // live under gemini_mm; new pages under voyage/nvidia. Try each in order
+    // and return the first non-empty result set.
     let filter = serde_json::json!({
         "must": [
             {"key": "feature", "match": {"value": feature_tag}}
         ]
     });
 
-    match qdrant
-        .search_points(
-            &embedding,
-            limit,
-            Some(&filter),
-            crate::qdrant_client::EmbeddingProvider::GeminiEmbedding2,
-        )
-        .await
-    {
-        Ok(results) => {
-            if results.is_empty() {
-                return format!("No results found for '{}' in '{}'. Make sure the content was vectorized first with vectorize_crawled_content.", query, feature_tag);
-            }
-            let mut output = format!("Search results for '{}' ({}):\n\n", query, feature_tag);
-            for (i, r) in results.iter().enumerate() {
-                let score = r.get("score").and_then(|v| v.as_f64()).unwrap_or(0.0);
-                let url = r
-                    .get("agent_response")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("unknown");
-                let title = r
-                    .get("context")
-                    .and_then(|c| c.get("page_title"))
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("");
-                let content = r.get("user_message").and_then(|v| v.as_str()).unwrap_or("");
-                let snippet = if content.chars().count() > 500 {
-                    format!("{}...", content.chars().take(500).collect::<String>())
-                } else {
-                    content.to_string()
-                };
-                output.push_str(&format!(
-                    "{}. [Score: {:.2}] {} ({})\n",
-                    i + 1,
-                    score,
-                    title,
-                    url
-                ));
-                if !snippet.is_empty() {
-                    output.push_str(&format!("   {}\n\n", snippet.replace('\n', " ")));
+    let provider_chain: [(crate::qdrant_client::EmbeddingProvider, Option<String>); 3] = [
+        (crate::qdrant_client::EmbeddingProvider::Voyage, {
+            app_state
+                .voyage_embeddings
+                .as_ref()
+                .map(|_| "voyage".to_string())
+        }),
+        (crate::qdrant_client::EmbeddingProvider::Nvidia2048, {
+            app_state
+                .nvidia_nim_client
+                .as_ref()
+                .map(|_| "nvidia".to_string())
+        }),
+        (crate::qdrant_client::EmbeddingProvider::GeminiEmbedding2, {
+            app_state
+                .video_gemini_client
+                .as_ref()
+                .or(app_state.gemini_client.as_ref())
+                .map(|_| "gemini_mm".to_string())
+        }),
+    ];
+
+    let mut results: Vec<serde_json::Value> = Vec::new();
+    let mut last_err = String::new();
+    for (provider, available) in &provider_chain {
+        let Some(_tag) = available else { continue };
+        let embedding = match provider {
+            crate::qdrant_client::EmbeddingProvider::Voyage => {
+                match app_state.voyage_embeddings.as_ref() {
+                    Some(v) => match v.embed_query(query.to_string()).await {
+                        Ok(e) => e,
+                        Err(e) => {
+                            last_err = format!("voyage: {e}");
+                            continue;
+                        }
+                    },
+                    None => continue,
                 }
             }
-            output
+            crate::qdrant_client::EmbeddingProvider::Nvidia2048 => {
+                match app_state.nvidia_nim_client.as_ref() {
+                    Some(n) => match n.embed_text(query).await {
+                        Ok(e) => e,
+                        Err(e) => {
+                            last_err = format!("nvidia: {e}");
+                            continue;
+                        }
+                    },
+                    None => continue,
+                }
+            }
+            crate::qdrant_client::EmbeddingProvider::GeminiEmbedding2 => {
+                match app_state
+                    .video_gemini_client
+                    .as_ref()
+                    .or(app_state.gemini_client.as_ref())
+                {
+                    Some(g) => match g
+                        .embed_content_with_model(query, "models/gemini-embedding-2", Some(1536))
+                        .await
+                    {
+                        Ok(e) => e,
+                        Err(e) => {
+                            last_err = format!("gemini_mm: {e}");
+                            continue;
+                        }
+                    },
+                    None => continue,
+                }
+            }
+            _ => continue,
+        };
+
+        match qdrant
+            .search_points(&embedding, limit, Some(&filter), *provider)
+            .await
+        {
+            Ok(r) if !r.is_empty() => {
+                results = r;
+                break;
+            }
+            Ok(_) => continue, // empty — try the next provider (older data)
+            Err(e) => {
+                last_err = format!("{provider:?}: {e}");
+                continue;
+            }
         }
-        Err(e) => format!("Error searching crawled content: {e}"),
+    }
+
+    if results.is_empty() {
+        if last_err.is_empty() {
+            return format!("No results found for '{}' in '{}'. Make sure the content was vectorized first with vectorize_crawled_content.", query, feature_tag);
+        }
+        return format!("Error searching crawled content: {last_err}");
+    }
+
+    {
+        let mut output = format!("Search results for '{}' ({}):\n\n", query, feature_tag);
+        for (i, r) in results.iter().enumerate() {
+            let score = r.get("score").and_then(|v| v.as_f64()).unwrap_or(0.0);
+            let url = r
+                .get("agent_response")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown");
+            let title = r
+                .get("context")
+                .and_then(|c| c.get("page_title"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let content = r.get("user_message").and_then(|v| v.as_str()).unwrap_or("");
+            let snippet = if content.chars().count() > 500 {
+                format!("{}...", content.chars().take(500).collect::<String>())
+            } else {
+                content.to_string()
+            };
+            output.push_str(&format!(
+                "{}. [Score: {:.2}] {} ({})\n",
+                i + 1,
+                score,
+                title,
+                url
+            ));
+            if !snippet.is_empty() {
+                output.push_str(&format!("   {}\n\n", snippet.replace('\n', " ")));
+            }
+        }
+        output
     }
 }
 

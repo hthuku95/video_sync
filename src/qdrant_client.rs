@@ -21,6 +21,11 @@ pub enum EmbeddingProvider {
     GeminiEmbedding2,
     /// Qwen3-VL multimodal embeddings (1536 dimensions) - fallback multimodal provider
     QwenVL,
+    /// NVIDIA NIM nemotron embeddings (2048 dimensions) — owner directive Nov 18
+    /// 2026: the NVIDIA path for vectorization so retrieval survives the
+    /// Claude/Gemini/Qwen billing outages. Rides the NIM API key (dedicated
+    /// education key available), verified live against nemotron-3-embed-1b.
+    Nvidia2048,
 }
 
 impl EmbeddingProvider {
@@ -31,6 +36,7 @@ impl EmbeddingProvider {
             Self::Gemini => "gemini",
             Self::GeminiEmbedding2 => "gemini_mm",
             Self::QwenVL => "qwen_vl",
+            Self::Nvidia2048 => "nvidia",
         }
     }
 
@@ -41,6 +47,7 @@ impl EmbeddingProvider {
             Self::Gemini => vec![0.0; 768],
             Self::GeminiEmbedding2 => vec![0.0; gemini_embedding2_dimensions()],
             Self::QwenVL => vec![0.0; qwen_vl_dimensions()],
+            Self::Nvidia2048 => vec![0.0; 2048],
         }
     }
 
@@ -51,6 +58,7 @@ impl EmbeddingProvider {
             Self::Gemini => 768,
             Self::GeminiEmbedding2 => gemini_embedding2_dimensions(),
             Self::QwenVL => qwen_vl_dimensions(),
+            Self::Nvidia2048 => 2048,
         }
     }
 
@@ -59,10 +67,11 @@ impl EmbeddingProvider {
         match dims {
             1024 => Ok(Self::Voyage),
             768 => Ok(Self::Gemini),
+            2048 => Ok(Self::Nvidia2048),
             d if d == gemini_embedding2_dimensions() => Ok(Self::GeminiEmbedding2),
             d if d == qwen_vl_dimensions() => Ok(Self::QwenVL),
             _ => Err(format!(
-                "Unknown embedding dimension: {}. Expected 1024 (Voyage), 768 (Gemini), {} (Gemini Embeddings 2), or {} (Qwen-VL)",
+                "Unknown embedding dimension: {}. Expected 1024 (Voyage), 768 (Gemini), 2048 (NVIDIA nemotron), {} (Gemini Embeddings 2), or {} (Qwen-VL)",
                 dims,
                 gemini_embedding2_dimensions(),
                 qwen_vl_dimensions()
@@ -154,6 +163,12 @@ impl QdrantClient {
             "qwen_vl".to_string(),
             VectorParamsBuilder::new(qwen_vl_dimensions() as u64, Distance::Cosine).build(),
         );
+        // NVIDIA nemotron vector (2048 dims) — the NVIDIA path for vectorization
+        // (owner directive Nov 18 2026). Survives Claude/Gemini/Qwen outages.
+        named_vectors.insert(
+            "nvidia".to_string(),
+            VectorParamsBuilder::new(2048, Distance::Cosine).build(),
+        );
 
         let result = self
             .client
@@ -185,6 +200,12 @@ impl QdrantClient {
                         "Qdrant collection '{}' already exists, ensuring indexes exist",
                         self.collection_name
                     );
+
+                    // Ensure the NVIDIA named vector exists on pre-existing
+                    // collections (owner directive Nov 18 2026 — the NVIDIA
+                    // path for vectorization). Best-effort: collections created
+                    // before this change don't have the "nvidia" named vector.
+                    self.ensure_nvidia_named_vector().await;
 
                     // Still try to create indexes in case they're missing
                     self.create_payload_indexes().await?;
@@ -335,6 +356,252 @@ impl QdrantClient {
 
         tracing::info!("🎯 Qdrant payload indexing setup complete - enhanced performance for chat history retrieval");
         Ok(())
+    }
+
+    /// Add the `nvidia` (2048-dim) named vector to an existing collection.
+    /// Qdrant supports adding named vectors via UpdateCollection with a
+    /// VectorsConfigDiff params-map. Best-effort — logs and continues on
+    /// failure so startup never blocks on this.
+    async fn ensure_nvidia_named_vector(&self) {
+        use qdrant_client::qdrant::{
+            vectors_config_diff, UpdateCollectionBuilder, VectorParamsDiffBuilder,
+            VectorParamsDiffMap, VectorsConfigDiff,
+        };
+        let mut params_map = std::collections::HashMap::new();
+        params_map.insert(
+            "nvidia".to_string(),
+            VectorParamsDiffBuilder::new(2048, Distance::Cosine).build(),
+        );
+        let diff = VectorsConfigDiff {
+            config: Some(vectors_config_diff::Config::ParamsMap(
+                VectorParamsDiffMap { map: params_map },
+            )),
+        };
+        let result = self
+            .client
+            .update_collection(
+                UpdateCollectionBuilder::new(&self.collection_name).vectors_config(diff),
+            )
+            .await;
+        match result {
+            Ok(_) => tracing::info!(
+                "Qdrant collection {}: 'nvidia' (2048) named vector ensured",
+                self.collection_name
+            ),
+            Err(e) => {
+                let msg = e.to_string();
+                if msg.contains("already exists") || msg.contains("same as existing") {
+                    tracing::debug!(
+                        "Qdrant 'nvidia' named vector already present on {}",
+                        self.collection_name
+                    );
+                } else {
+                    tracing::warn!("Could not add 'nvidia' named vector to {}: {} (NVIDIA vectors will be skipped for this collection)", self.collection_name, msg);
+                }
+            }
+        }
+    }
+
+    /// Store chat memory using NVIDIA nemotron embeddings (2048 dims).
+    /// The NVIDIA path for vectorization (owner directive Nov 18 2026) —
+    /// rides the NIM API key so retrieval survives Claude/Gemini/Qwen outages.
+    pub async fn store_chat_memory_with_nvidia(
+        &self,
+        session_id: &str,
+        user_id: Option<&str>,
+        user_message: &str,
+        agent_response: &str,
+        files_referenced: Vec<String>,
+        context: HashMap<String, serde_json::Value>,
+        nim_client: &crate::nvidia_nim_client::NvidiaNimClient,
+        feature: Option<&str>,
+    ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+        let embedding = nim_client.embed_text(user_message).await?;
+
+        let document = ChatMemoryDocument {
+            id: Uuid::new_v4().to_string(),
+            session_id: session_id.to_string(),
+            user_id: user_id.map(|s| s.to_string()),
+            timestamp: chrono::Utc::now(),
+            user_message: user_message.to_string(),
+            agent_response: agent_response.to_string(),
+            context,
+            files_referenced,
+        };
+
+        let mut named_vectors = HashMap::new();
+        named_vectors.insert(
+            EmbeddingProvider::Nvidia2048.vector_name().to_string(),
+            embedding,
+        );
+
+        let payload_value: serde_json::Value = json!({
+            "session_id": document.session_id,
+            "user_id": document.user_id,
+            "feature": feature.unwrap_or("general"),
+            "timestamp": document.timestamp.to_rfc3339(),
+            "user_message": document.user_message,
+            "agent_response": document.agent_response,
+            "context": document.context,
+            "files_referenced": document.files_referenced,
+            "embedding_provider": "nvidia_nemotron"
+        });
+
+        let mut qdrant_payload: std::collections::HashMap<String, qdrant_client::qdrant::Value> =
+            std::collections::HashMap::new();
+        if let Some(obj) = payload_value.as_object() {
+            for (key, value) in obj {
+                qdrant_payload.insert(key.clone(), value.clone().into());
+            }
+        }
+
+        let point = PointStruct::new(
+            document.id.clone(),
+            Vectors::from(named_vectors),
+            qdrant_payload,
+        );
+
+        self.client
+            .upsert_points(UpsertPointsBuilder::new(&self.collection_name, vec![point]).wait(true))
+            .await?;
+
+        tracing::debug!(
+            "Stored chat memory with NVIDIA nemotron embeddings, ID: {}",
+            document.id
+        );
+        Ok(document.id)
+    }
+
+    /// Store a crawled page under the Voyage (1024) named vector.
+    /// De-gemini-fication (owner directive Nov 18 2026): the crawl pipeline's
+    /// primary embedding path — mirrors the gemini_mm payload shape so the
+    /// same `feature` filter works across providers.
+    pub async fn store_crawled_page_with_voyage(
+        &self,
+        feature_tag: &str,
+        embed_text: &str,
+        url: &str,
+        page_title: &str,
+        context: HashMap<String, serde_json::Value>,
+        voyage_client: &crate::voyage_embeddings::VoyageEmbeddings,
+        feature: Option<&str>,
+    ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+        let embedding = voyage_client.embed_document(embed_text.to_string()).await?;
+
+        let document = ChatMemoryDocument {
+            id: Uuid::new_v4().to_string(),
+            session_id: feature_tag.to_string(),
+            user_id: None,
+            timestamp: chrono::Utc::now(),
+            user_message: embed_text.to_string(),
+            agent_response: url.to_string(),
+            context,
+            files_referenced: vec![],
+        };
+
+        let mut named_vectors = HashMap::new();
+        named_vectors.insert(
+            EmbeddingProvider::Voyage.vector_name().to_string(),
+            embedding,
+        );
+
+        let payload_value: serde_json::Value = json!({
+            "session_id": document.session_id,
+            "user_id": serde_json::Value::Null,
+            "feature": feature.unwrap_or(feature_tag),
+            "timestamp": document.timestamp.to_rfc3339(),
+            "user_message": document.user_message,
+            "agent_response": document.agent_response,
+            "context": {
+                "page_url": url,
+                "page_title": page_title,
+                "crawl_time": document.timestamp.to_rfc3339(),
+            },
+            "files_referenced": [],
+            "embedding_provider": "voyage"
+        });
+
+        self.upsert_memory_point(&document, named_vectors, payload_value)
+            .await
+    }
+
+    /// Store a crawled page under the NVIDIA nemotron (2048) named vector —
+    /// the NVIDIA path for vectorization (owner directive Nov 18 2026).
+    pub async fn store_crawled_page_with_nvidia(
+        &self,
+        feature_tag: &str,
+        embed_text: &str,
+        url: &str,
+        page_title: &str,
+        context: HashMap<String, serde_json::Value>,
+        nim_client: &crate::nvidia_nim_client::NvidiaNimClient,
+        feature: Option<&str>,
+    ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+        let embedding = nim_client.embed_text(embed_text).await?;
+
+        let document = ChatMemoryDocument {
+            id: Uuid::new_v4().to_string(),
+            session_id: feature_tag.to_string(),
+            user_id: None,
+            timestamp: chrono::Utc::now(),
+            user_message: embed_text.to_string(),
+            agent_response: url.to_string(),
+            context,
+            files_referenced: vec![],
+        };
+
+        let mut named_vectors = HashMap::new();
+        named_vectors.insert(
+            EmbeddingProvider::Nvidia2048.vector_name().to_string(),
+            embedding,
+        );
+
+        let payload_value: serde_json::Value = json!({
+            "session_id": document.session_id,
+            "user_id": serde_json::Value::Null,
+            "feature": feature.unwrap_or(feature_tag),
+            "timestamp": document.timestamp.to_rfc3339(),
+            "user_message": document.user_message,
+            "agent_response": document.agent_response,
+            "context": {
+                "page_url": url,
+                "page_title": page_title,
+                "crawl_time": document.timestamp.to_rfc3339(),
+            },
+            "files_referenced": [],
+            "embedding_provider": "nvidia_nemotron"
+        });
+
+        self.upsert_memory_point(&document, named_vectors, payload_value)
+            .await
+    }
+
+    /// Shared upsert for memory documents (payload → Qdrant value map).
+    async fn upsert_memory_point(
+        &self,
+        document: &ChatMemoryDocument,
+        named_vectors: HashMap<String, Vec<f32>>,
+        payload_value: serde_json::Value,
+    ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+        let mut qdrant_payload: std::collections::HashMap<String, qdrant_client::qdrant::Value> =
+            std::collections::HashMap::new();
+        if let Some(obj) = payload_value.as_object() {
+            for (key, value) in obj {
+                qdrant_payload.insert(key.clone(), value.clone().into());
+            }
+        }
+
+        let point = PointStruct::new(
+            document.id.clone(),
+            Vectors::from(named_vectors),
+            qdrant_payload,
+        );
+
+        self.client
+            .upsert_points(UpsertPointsBuilder::new(&self.collection_name, vec![point]).wait(true))
+            .await?;
+
+        Ok(document.id.clone())
     }
 
     pub async fn store_chat_memory_with_voyage(

@@ -759,6 +759,56 @@ impl NvidiaNimClient {
         serde_json::Value::Array(tools)
     }
 
+    /// Embed text via the NIM embeddings endpoint (owner directive Nov 18 2026:
+    /// NVIDIA-path vectorization so retrieval survives Claude/Gemini/Qwen
+    /// billing outages). Model from `NVIDIA_NIM_EMBED_MODEL`
+    /// (default `nvidia/nemotron-3-embed-1b`, 2048 dims — verified live).
+    /// Rides the same API key as the NIM chat/vision chain, so one healthy
+    /// provider covers text + vision + retrieval together.
+    pub async fn embed_text(&self, text: &str) -> Result<Vec<f32>, String> {
+        let model = std::env::var("NVIDIA_NIM_EMBED_MODEL")
+            .unwrap_or_else(|_| "nvidia/nemotron-3-embed-1b".to_string());
+        let body = serde_json::json!({
+            "model": model,
+            "input": [text],
+            "input_type": "query",
+            "truncate": "END",
+        });
+        let resp = self
+            .client
+            .post("https://integrate.api.nvidia.com/v1/embeddings")
+            .header("Authorization", format!("Bearer {}", self.api_key))
+            .header("Content-Type", "application/json")
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| format!("NIM embeddings request failed: {e}"))?;
+        let status = resp.status();
+        let text_body = resp.text().await.unwrap_or_default();
+        if !status.is_success() {
+            return Err(format!(
+                "NIM embeddings failed ({}): {}",
+                status,
+                text_body.chars().take(200).collect::<String>()
+            ));
+        }
+        let parsed: serde_json::Value = serde_json::from_str(&text_body)
+            .map_err(|e| format!("NIM embeddings bad JSON: {e}"))?;
+        let vector = parsed
+            .get("data")
+            .and_then(|d| d.get(0))
+            .and_then(|d| d.get("embedding"))
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|x| x.as_f64().map(|f| f as f32))
+                    .collect::<Vec<f32>>()
+            })
+            .filter(|v| !v.is_empty())
+            .ok_or_else(|| "NIM embeddings: no embedding in response".to_string())?;
+        Ok(vector)
+    }
+
     /// Single API call with tool definitions.
     /// Messages should be OpenAI-format array. For vision content, use `vision_message()`
     /// or build content-parts arrays in the message.
