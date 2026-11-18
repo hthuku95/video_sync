@@ -7801,23 +7801,20 @@ async fn delivery_page(
     <button type="button" onclick="sendFeedback()" style="padding:8px 16px;border-radius:8px;border:0;background:#6366f1;color:#fff;font-weight:600;cursor:pointer;">Send</button>
   </div>
   <div id="fb-status" style="font-size:12px;color:#6366f1;margin-top:6px;"></div>
-</div>
-<script>
-function sendFeedback(){{
-  const inp = document.getElementById('fb-input');
-  const msg = inp.value.trim();
-  if(!msg) return;
-  const st = document.getElementById('fb-status');
-  st.textContent = 'Sending...';
-  fetch('/delivery/{id}/feedback', {{method:'POST', headers:{{'Content-Type':'application/json'}}, body: JSON.stringify({{message: msg}})}})
-    .then(r=>r.json()).then(d=>{{
-      if(d.success){{ st.textContent='Note saved — will be applied on the next render attempt.'; inp.value=''; }}
-      else {{ st.textContent='Error: '+(d.error||'failed'); }}
-    }}).catch(()=>{{ st.textContent='Network error'; }});
-}}
-if(document.querySelector('.status-dot') && !document.querySelector('.status-dot').style.background.includes('22c55e')){{
-  // Live progress polling (owner directive Nov 10 2026): replace blind reloads
-  // with a progress bar + plain-language status + the agent's own explanation.
+</div>"#,
+                    id = id
+                )
+            } else {
+                String::new()
+            };
+
+            // PROGRESS POLLING (owner directive Nov 10 2026) — ALWAYS included for
+            // non-completed deliveries, independent of workflow_id. The progress
+            // endpoint reads the delivery status directly.
+            let progress_html = if status.ne_ignore_ascii_case("completed") {
+                format!(
+                    r#"<script>
+(function() {
   const bar = document.createElement('div');
   bar.style.cssText = 'margin:14px 0 4px;height:10px;border-radius:999px;background:rgba(148,163,184,0.18);overflow:hidden';
   const fill = document.createElement('div');
@@ -7825,36 +7822,37 @@ if(document.querySelector('.status-dot') && !document.querySelector('.status-dot
   bar.appendChild(fill);
   const statusEl = document.querySelector('.status-dot');
   const statusRow = statusEl ? statusEl.closest('div') : null;
-  if (statusRow) {{
+  if (statusRow) {
     const line = document.createElement('div');
     line.id = 'agent-progress-line';
     line.style.cssText = 'margin-top:8px;font-size:14px;color:#a5b0c8';
     line.textContent = 'Checking production status…';
     statusRow.parentNode.insertBefore(bar, statusRow.nextSibling);
     statusRow.parentNode.insertBefore(line, bar.nextSibling);
-  }}
+  }
   let done = false;
-  async function pollProgress(){{
-    try{{
-      const res = await fetch('/delivery/{id}/progress?explain=1');
+  async function pollProgress(){
+    try{
+      const res = await fetch('/delivery/<built-in function id>/progress?explain=1');
       const d = await res.json();
       if(!d.success) return;
       fill.style.width = Math.max(4, Math.min(100, d.progress_pct || 0)) + '%';
       const line = document.getElementById('agent-progress-line');
       if(line) line.textContent = (d.explain ? '🤖 ' + d.explain : (d.detail || 'Producing your video…'));
-      if(d.phase === 'completed' || d.status === 'ready' || d.status === 'completed'){{
-        done = true; setTimeout(()=>location.reload(), 1200); return;
-      }}
-      if(d.phase === 'failed'){{
+      if(d.phase === 'completed' || d.status === 'ready' || d.status === 'completed'){
+        fill.style.width = '100%';
+        if(line) line.textContent = '✅ Your video is ready!';
         done = true;
+      }
+      if(d.phase === 'failed' || d.status === 'failed'){
         if(line) line.textContent = '⚠️ This attempt failed — leave a note below and the agent will apply it on the next attempt.';
-        return;
-      }}
-    }}catch(e){{ /* keep last state on network blips */ }}
+        done = true;
+      }
+    }catch(e){}
     if(!done) setTimeout(pollProgress, 5000);
-  }}
+  }
   pollProgress();
-}}
+})();
 </script>"#,
                     id = id
                 )
@@ -8005,6 +8003,7 @@ if(document.querySelector('.status-dot') && !document.querySelector('.status-dot
   {score_html}
   {clip_gallery_html}
   {feedback_html}
+  {progress_html}
   <div id="zernio-section" style="margin-top:16px;"></div>
 </div>
 <div class="footer">
@@ -8708,7 +8707,6 @@ pub async fn api_create_delivery(
         idempotency_key: Some(format!("delivery-agentic:{delivery_id}")),
         reference_images: vec![],
         nim_profile: None,
-        lane: "interactive".to_string(),
     };
     let workflow_id = match crate::services::AgenticServicePipeline::start(
         state.clone(),
@@ -9165,7 +9163,6 @@ pub async fn api_generate_dfy_portfolio_samples(
             idempotency_key: Some(format!("portfolio-dfy:{}", service.slug)),
             reference_images: vec![],
             nim_profile: None,
-            lane: "interactive".to_string(),
         };
         let slug = service.slug;
 
@@ -9656,7 +9653,6 @@ pub async fn api_generate_service_portfolio_sample(
                     idempotency_key: Some(format!("service-sample:{}", slug)),
                     reference_images: vec![],
                     nim_profile: None,
-                    lane: "interactive".to_string(),
                 };
 
                 match crate::services::AgenticServicePipeline::start(
@@ -10489,7 +10485,6 @@ pub async fn ensure_delivery_workflow(
                 "gig_type": gig_type,
                 "prompt_preview": prompt.chars().take(240).collect::<String>(),
             }),
-            lane: "interactive".to_string(),
             artifact_requirements: serde_json::json!([
                 {
                     "kind": "delivery_output",
