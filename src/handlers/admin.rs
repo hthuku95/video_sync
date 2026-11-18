@@ -14074,7 +14074,7 @@ pub async fn admin_showcase_page(Extension(state): Extension<Arc<AppState>>) -> 
 </div>"#,
                 key = key,
                 title = html_escape(&title),
-                fname = html_escape(&format!("{}.mp4", title.replace(' ', '_'))),
+                fname = html_escape(&format!("{}.mp4", title.replace(" ", "_"))),
                 id = id,
                 gig = html_escape(&gig),
             ));
