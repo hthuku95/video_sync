@@ -100,6 +100,10 @@ fn qwen_vl_dimensions() -> usize {
 pub struct QdrantClient {
     client: Qdrant,
     collection_name: String,
+    /// REST endpoint for operations the gRPC proto can't express portably
+    /// (e.g. adding a named vector to an existing collection).
+    rest_url: String,
+    rest_api_key: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -130,6 +134,8 @@ impl QdrantClient {
         Ok(Self {
             client,
             collection_name: "agent_memory".to_string(),
+            rest_url: url,
+            rest_api_key: api_key,
         })
     }
 
@@ -362,49 +368,59 @@ impl QdrantClient {
     /// Qdrant supports adding named vectors via UpdateCollection with a
     /// VectorsConfigDiff params-map. Best-effort — logs and continues on
     /// failure so startup never blocks on this.
+    /// Add the `nvidia` (2048-dim) named vector to an existing collection via
+    /// the Qdrant REST API. The vendored gRPC proto's VectorParamsDiff carries
+    /// only HNSW/quantization diffs — it cannot express size+distance for a
+    /// NEW named vector, so the portable path is the REST PATCH. Best-effort:
+    /// logs and continues on failure so startup never blocks on this.
     async fn ensure_nvidia_named_vector(&self) {
-        use qdrant_client::qdrant::{
-            vectors_config_diff, UpdateCollectionBuilder, VectorParamsDiffBuilder,
-            VectorParamsDiffMap, VectorsConfigDiff,
-        };
-        let mut params_map = std::collections::HashMap::new();
-        params_map.insert(
-            "nvidia".to_string(),
-            VectorParamsDiffBuilder::new(2048, Distance::Cosine).build(),
+        let url = format!(
+            "{}/collections/{}",
+            self.rest_url.trim_end_matches('/'),
+            self.collection_name
         );
-        let diff = VectorsConfigDiff {
-            config: Some(vectors_config_diff::Config::ParamsMap(
-                VectorParamsDiffMap { map: params_map },
-            )),
-        };
-        let result = self
-            .client
-            .update_collection(
-                UpdateCollectionBuilder::new(&self.collection_name).vectors_config(diff),
-            )
-            .await;
-        match result {
-            Ok(_) => tracing::info!(
-                "Qdrant collection {}: 'nvidia' (2048) named vector ensured",
-                self.collection_name
-            ),
-            Err(e) => {
-                let msg = e.to_string();
-                if msg.contains("already exists") || msg.contains("same as existing") {
+        let body = serde_json::json!({
+            "vectors": {
+                "nvidia": {"size": 2048, "distance": "Cosine"}
+            }
+        });
+        let http = reqwest::Client::new();
+        let mut req = http.patch(&url).json(&body);
+        if let Some(key) = &self.rest_api_key {
+            req = req.header("api-key", key);
+        }
+        match req.send().await {
+            Ok(resp) if resp.status().is_success() => {
+                tracing::info!(
+                    "Qdrant collection {}: 'nvidia' (2048) named vector ensured",
+                    self.collection_name
+                );
+            }
+            Ok(resp) => {
+                let status = resp.status();
+                let text = resp.text().await.unwrap_or_default();
+                if text.contains("already exists") {
                     tracing::debug!(
                         "Qdrant 'nvidia' named vector already present on {}",
                         self.collection_name
                     );
                 } else {
-                    tracing::warn!("Could not add 'nvidia' named vector to {}: {} (NVIDIA vectors will be skipped for this collection)", self.collection_name, msg);
+                    tracing::warn!(
+                        "Could not add 'nvidia' named vector to {} ({}): {} — NVIDIA vectors will be skipped for this collection",
+                        self.collection_name, status,
+                        text.chars().take(200).collect::<String>()
+                    );
                 }
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "Could not add 'nvidia' named vector to {}: {} — NVIDIA vectors will be skipped for this collection",
+                    self.collection_name, e
+                );
             }
         }
     }
 
-    /// Store chat memory using NVIDIA nemotron embeddings (2048 dims).
-    /// The NVIDIA path for vectorization (owner directive Nov 18 2026) —
-    /// rides the NIM API key so retrieval survives Claude/Gemini/Qwen outages.
     pub async fn store_chat_memory_with_nvidia(
         &self,
         session_id: &str,

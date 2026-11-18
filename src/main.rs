@@ -875,6 +875,19 @@ async fn main() {
                 tokio::time::sleep(std::time::Duration::from_secs(5)).await;
             }
         });
+        // Outreach batch worker (owner directive Nov 18 2026): processes the
+        // durable prospect_outreach_batches — samples for all modes, emails
+        // only in 'full' mode. Per-item claims (FOR UPDATE SKIP LOCKED) make
+        // multi-instance runs safe.
+        let outreach_state = shared_state.clone();
+        tokio::spawn(async move {
+            loop {
+                jobs::outreach_batch_worker::run_outreach_batch_worker(outreach_state.clone())
+                    .await;
+                tracing::warn!("⚠️ Outreach batch worker exited. Restarting in 5s...");
+                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+            }
+        });
         // FALL THROUGH — do NOT block; pipeline infra + server start below.
     }
 
@@ -943,7 +956,10 @@ async fn main() {
         .merge(admin_only_routes) // Admin-only routes like API docs
         .route("/api/status", axum::routing::get(api_status))
         .route("/api/features", axum::routing::get(api_features))
-        .route("/api/showcase", axum::routing::get(handlers::showcase::api_showcase)) // 🖼️ public marketing showcase
+        .route(
+            "/api/showcase",
+            axum::routing::get(handlers::showcase::api_showcase),
+        ) // 🖼️ public marketing showcase
         // .layer(axum::middleware::from_fn(middleware::frontend_rate_limit::frontend_rate_limit_middleware))
         // .layer(axum::middleware::from_fn(middleware::rate_limit::rate_limit_middleware))
         .layer(axum::middleware::from_fn(

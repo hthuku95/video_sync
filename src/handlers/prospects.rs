@@ -131,6 +131,10 @@ pub fn prospect_routes() -> Router {
             "/api/admin/prospects/bulk-send-email",
             post(bulk_send_prospect_emails),
         )
+        .route(
+            "/api/admin/prospects/outreach-batches/:id",
+            get(outreach_batch_status),
+        )
         .route("/api/admin/prospects/:id", delete(delete_prospect))
         .layer(axum::middleware::from_fn(admin_or_whitelisted_middleware))
         .layer(axum::middleware::from_fn(auth_middleware));
@@ -3726,9 +3730,18 @@ async fn bulk_send_prospect_emails(
 
     // Build the candidate list. Whitelisted (non-admin) users are scoped to
     // their own sourced prospects; admins see everything.
+    //
+    // SAMPLES-ONLY mode (owner directive Nov 18 2026): business_email and
+    // email_script are NOT required — we're generating sample videos for
+    // review, not sending anything. Many ON-service prospects (e.g. the
+    // CompariEdge wave) have no email yet but are still valid sample targets.
+    let samples_only = req.is_samples_only();
     let mut sql = String::from(
-        "SELECT id, display_name, business_email, email_script, service_type, sourced_by          FROM prospects WHERE business_email IS NOT NULL AND business_email <> ''",
+        "SELECT id, display_name, business_email, email_script, service_type, sourced_by FROM prospects WHERE TRUE",
     );
+    if !samples_only {
+        sql.push_str(" AND business_email IS NOT NULL AND business_email <> ''");
+    }
     let mut binds: Vec<String> = Vec::new();
     if !req.include_contacted() {
         sql.push_str(" AND (contact_status IS NULL OR contact_status NOT IN ('contacted','replied','interested','deal','converted'))");
@@ -3794,8 +3807,12 @@ async fn bulk_send_prospect_emails(
         let service: String = r
             .get::<Option<String>, _>("service_type")
             .unwrap_or_else(|| "landing_page".to_string());
-        match script {
-            Some(s) if !s.is_empty() => candidates.push((id, name, email, s, service)),
+        match (script, samples_only) {
+            // Full mode: an outreach script is required (the email sends it).
+            (Some(s), false) if !s.is_empty() => candidates.push((id, name, email, s, service)),
+            // Samples-only mode: scripts are irrelevant — the sample is the
+            // outreach surface. Prospects without scripts are eligible.
+            (_, true) => candidates.push((id, name, email, String::new(), service)),
             _ => skipped_no_script += 1,
         }
     }
@@ -3805,25 +3822,33 @@ async fn bulk_send_prospect_emails(
         return Ok(Json(json!({
             "success": true,
             "queued": 0,
-            "message": "No prospects with emails and outreach scripts to send. Generate outreach first.",
+            "message": if req.is_samples_only() {
+                "No prospects matched the filters (samples-only mode does not require emails or scripts).".to_string()
+            } else {
+                "No prospects with emails and outreach scripts to send. Generate outreach first.".to_string()
+            },
             "skipped_no_script": skipped_no_script,
         })));
     }
 
     // DURABLE BATCH (owner directive Nov 16 2026 — sample-first outreach):
-    // create the batch + per-prospect items. The background worker (vs-edu-worker)
-    // generates missing samples, then sends each email ONLY when its sample is
-    // ready. Restarts never lose the batch; per-item tracking available via the
+    // create the batch + per-prospect items. The background worker
+    // (outreach_batch_worker) generates missing samples, then — in 'full'
+    // mode — sends each email ONLY when its sample is ready. In
+    // 'samples_only' mode the worker stops at 'sample_ready' and no email
+    // is ever sent (owner reviews samples first, triggers sends later).
+    // Restarts never lose the batch; per-item tracking available via the
     // batch status endpoint.
     let batch_id: Uuid = sqlx::query_scalar(
-        "INSERT INTO prospect_outreach_batches (created_by, service_type, fresh_days, include_contacted, total_items)
-         VALUES ($1, $2, $3, $4, $5) RETURNING id",
+        "INSERT INTO prospect_outreach_batches (created_by, service_type, fresh_days, include_contacted, total_items, mode)
+         VALUES ($1, $2, $3, $4, $5, $6) RETURNING id",
     )
     .bind(acting_user)
     .bind(req.service_type.clone())
     .bind(req.fresh_days)
     .bind(req.include_contacted())
     .bind(candidates.len() as i32)
+    .bind(if samples_only { "samples_only" } else { "full" })
     .fetch_one(&state.db_pool)
     .await
     .map_err(|e| (
@@ -3883,13 +3908,21 @@ async fn bulk_send_prospect_emails(
     Ok(Json(json!({
         "success": true,
         "batch_id": batch_id.to_string(),
+        "mode": if samples_only { "samples_only" } else { "full" },
         "total": total_prospects,
         "samples_to_generate": sample_needed,
         "samples_already_ready": sample_recent,
-        "message": format!(
-            "Outreach batch created: {} prospects. {} sample video(s) will be generated first (background lane); each email is sent automatically once its sample is ready. Progress: /admin/email-logs.",
-            total_prospects, sample_needed
-        ),
+        "message": if samples_only {
+            format!(
+                "SAMPLES-ONLY batch created: {} prospects. {} sample video(s) will be generated (no emails will be sent). Review the samples, then trigger sends later. Progress: /admin/email-logs.",
+                total_prospects, sample_needed
+            )
+        } else {
+            format!(
+                "Outreach batch created: {} prospects. {} sample video(s) will be generated first (background lane); each email is sent automatically once its sample is ready. Progress: /admin/email-logs.",
+                total_prospects, sample_needed
+            )
+        },
     })))
 }
 
@@ -3900,11 +3933,23 @@ struct BulkSendEmailRequest {
     fresh_days: Option<i64>,
     include_contacted: Option<bool>,
     limit: Option<i64>,
+    /// "full" (default): sample-first, then email each prospect when its
+    /// sample is ready. "samples_only": generate every missing sample and
+    /// STOP — no emails are ever sent from this batch; the owner reviews
+    /// the samples first and can trigger sends later (owner directive
+    /// Nov 18 2026: samples without emails).
+    mode: Option<String>,
 }
 
 impl BulkSendEmailRequest {
     fn include_contacted(&self) -> bool {
         self.include_contacted.unwrap_or(false)
+    }
+    fn is_samples_only(&self) -> bool {
+        self.mode
+            .as_deref()
+            .map(|m| m.eq_ignore_ascii_case("samples_only"))
+            .unwrap_or(false)
     }
 }
 
@@ -4344,7 +4389,6 @@ Legacy DM tone: {existing_dm}"#,
         "ig_profile_url": ig_profile_url,
     })))
 }
-
 async fn generate_prospect_sample_pack(
     Extension(state): Extension<Arc<AppState>>,
     Extension(claims): Extension<crate::models::auth::Claims>,
@@ -4371,6 +4415,17 @@ async fn generate_prospect_sample_pack(
             ));
         }
     }
+    create_prospect_sample_pack_core(state, id, req).await
+}
+
+/// Core of the per-prospect sample-pack generation (shared by the admin
+/// handler AND the outreach batch worker — the worker passes no overrides).
+/// Returns the response JSON containing delivery_id on success.
+pub(crate) async fn create_prospect_sample_pack_core(
+    state: Arc<AppState>,
+    id: Uuid,
+    req: Option<GenerateProspectSamplePackRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
     let row = sqlx::query(
         "SELECT display_name, platform, platform_url, content_category, channel_description,
                 service_type, external_url, sample_delivery_id, contact_enrichment
@@ -5396,6 +5451,7 @@ tr:hover td{background:rgba(92,84,112,0.12)}
     <div class="stat-strip" id="prospect-contact-summary"></div>
     <div style="margin:10px 0;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
       <button class="btn btn-primary" onclick="bulkSendEmails()">📧 Bulk Send Emails (new, with outreach)</button>
+      <button class="btn btn-ghost" onclick="bulkGenerateSamples()">🎬 Generate Samples Only (no emails)</button>
       <span id="bulk-send-status" style="color:#a8b8d3;font-size:0.85rem"></span>
     </div>
     <!-- Filter Tabs -->
@@ -6186,7 +6242,7 @@ async function bulkSendEmails(){
     const res = await fetch('/api/admin/prospects/bulk-send-email', {
       method:'POST',
       headers:{'Authorization':'Bearer '+token,'Content-Type':'application/json'},
-      body: JSON.stringify({limit: 100})
+      body: JSON.stringify({limit: 100, mode: 'full'})
     });
     const data = await res.json();
     if(data.success){
@@ -6195,6 +6251,30 @@ async function bulkSendEmails(){
     } else {
       status.textContent = 'Error: '+(data.message||data.error||'failed');
       showMsg(data.message||data.error||'Bulk send failed', false);
+    }
+  } catch(e){
+    status.textContent = 'Network error: '+e;
+    showMsg('Network error: '+e, false);
+  }
+}
+
+async function bulkGenerateSamples(){
+  if(!confirm('Generate sample videos for ALL matched prospects WITHOUT sending any emails? Emails stay off until you trigger sends later.')) return;
+  const status = document.getElementById('bulk-send-status');
+  status.textContent = 'Queueing samples…';
+  try {
+    const res = await fetch('/api/admin/prospects/bulk-send-email', {
+      method:'POST',
+      headers:{'Authorization':'Bearer '+token,'Content-Type':'application/json'},
+      body: JSON.stringify({limit: 200, mode: 'samples_only'})
+    });
+    const data = await res.json();
+    if(data.success){
+      status.textContent = `✓ samples-only batch ${data.batch_id||''} — ${data.samples_to_generate||0} to generate, ${data.samples_already_ready||0} already ready. NO emails will be sent.`;
+      showMsg(data.message||'Samples-only batch created');
+    } else {
+      status.textContent = 'Error: '+(data.message||data.error||'failed');
+      showMsg(data.message||data.error||'Batch failed', false);
     }
   } catch(e){
     status.textContent = 'Network error: '+e;
@@ -11890,4 +11970,90 @@ async fn execute_search_dispatch(
         None,
     )
     .await;
+}
+
+/// GET /api/admin/prospects/outreach-batches/:id — batch + per-item status.
+/// Shows samples_only batches at a glance (sample_ready vs email_sent etc.).
+async fn outreach_batch_status(
+    Extension(state): Extension<Arc<AppState>>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<ErrorResponse>)> {
+    let batch: Option<(
+        Uuid,
+        Option<String>,
+        String,
+        i32,
+        i32,
+        Option<chrono::DateTime<chrono::Utc>>,
+    )> = sqlx::query_as(
+        "SELECT id, service_type, status, total_items, emails_sent, completed_at
+         FROM prospect_outreach_batches WHERE id = $1",
+    )
+    .bind(id)
+    .fetch_optional(&state.db_pool)
+    .await
+    .map_err(|e| db_err(e))?;
+
+    let Some((bid, service, batch_status, total, emails_sent, completed_at)) = batch else {
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                success: false,
+                message: "Batch not found".to_string(),
+            }),
+        ));
+    };
+    let _ = bid;
+
+    let items: Vec<(Uuid, String, String, Option<Uuid>, Option<String>)> = sqlx::query_as(
+        "SELECT prospect_id, prospect_name, status, delivery_id, COALESCE(sample_url,'')
+         FROM prospect_outreach_items WHERE batch_id = $1 ORDER BY created_at ASC",
+    )
+    .bind(id)
+    .fetch_all(&state.db_pool)
+    .await
+    .map_err(|e| db_err(e))?;
+
+    let mut by_status: std::collections::HashMap<String, i64> = Default::default();
+    for it in &items {
+        *by_status.entry(it.2.clone()).or_insert(0) += 1;
+    }
+
+    let items_json: Vec<serde_json::Value> = items
+        .iter()
+        .map(|(pid, name, status, delivery, url)| {
+            json!({
+                "prospect_id": pid,
+                "prospect_name": name,
+                "status": status,
+                "delivery_id": delivery,
+                "sample_url": url,
+                "delivery_link": delivery.map(|d| format!("/delivery/{d}")),
+            })
+        })
+        .collect();
+
+    Ok(Json(json!({
+        "success": true,
+        "batch": {
+            "id": id,
+            "service_type": service,
+            "status": batch_status,
+            "total_items": total,
+            "emails_sent": emails_sent,
+            "completed_at": completed_at,
+            "item_counts": by_status,
+        },
+        "items": items_json,
+    })))
+}
+
+fn db_err(e: sqlx::Error) -> (StatusCode, Json<ErrorResponse>) {
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(ErrorResponse {
+            success: false,
+            message: e.to_string(),
+        }),
+    )
 }

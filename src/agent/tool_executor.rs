@@ -3162,7 +3162,8 @@ async fn execute_analyze_image_claude(args: &Value) -> String {
 
     // NIM-first (de-gemini-fication, Nov 18 2026): use the NIM vision model
     // when configured; Gemini stays as the fallback.
-    if let Ok(nim_key) = std::env::var("NVIDIA_API_KEY")
+    if let Some(nim_key) = std::env::var("NVIDIA_API_KEY")
+        .ok()
         .map(|k| k.trim().to_string())
         .filter(|k| !k.is_empty())
     {
@@ -4434,7 +4435,8 @@ async fn execute_analyze_image_gemini(args: &HashMap<String, Value>) -> String {
 
     // NIM-first (de-gemini-fication, Nov 18 2026): use the NIM vision model
     // when configured; Gemini stays as the fallback.
-    if let Ok(nim_key) = std::env::var("NVIDIA_API_KEY")
+    if let Some(nim_key) = std::env::var("NVIDIA_API_KEY")
+        .ok()
         .map(|k| k.trim().to_string())
         .filter(|k| !k.is_empty())
     {

@@ -16,9 +16,9 @@ pub mod prospects; // 🎯 Admin prospect finder
 pub mod referrals; // 🔗 Referral codes + commissions for content machine users
 
 pub mod education_video; // 🎓 Education Video credits service ($50/10, $100/30 bundles)
+pub mod showcase; // 🖼️ Public marketing showcase (scene clips + full renders for the TS apps)
 pub mod social_publish;
 pub mod subscribe;
-pub mod showcase; // 🖼️ Public marketing showcase (scene clips + full renders for the TS apps)
 pub mod tools; // 🎬 On-demand FFmpeg tool endpoints
 pub mod ui;
 pub mod upload;

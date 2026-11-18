@@ -12,6 +12,7 @@ use uuid::Uuid;
 use crate::services::redis_pubsub::PubSubBus;
 
 pub mod education_post_worker;
+pub mod outreach_batch_worker;
 pub mod token_refresh;
 pub mod video_job;
 
