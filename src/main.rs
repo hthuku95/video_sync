@@ -943,6 +943,7 @@ async fn main() {
         .merge(admin_only_routes) // Admin-only routes like API docs
         .route("/api/status", axum::routing::get(api_status))
         .route("/api/features", axum::routing::get(api_features))
+        .route("/api/showcase", axum::routing::get(handlers::showcase::api_showcase)) // 🖼️ public marketing showcase
         // .layer(axum::middleware::from_fn(middleware::frontend_rate_limit::frontend_rate_limit_middleware))
         // .layer(axum::middleware::from_fn(middleware::rate_limit::rate_limit_middleware))
         .layer(axum::middleware::from_fn(
