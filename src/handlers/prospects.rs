@@ -221,7 +221,7 @@ struct GenerateOutreachRequest {
 }
 
 #[derive(Debug, Deserialize)]
-struct GenerateProspectSamplePackRequest {
+pub(crate) struct GenerateProspectSamplePackRequest {
     source_url: Option<String>,
     product_name: Option<String>,
     offer_type: Option<String>,
