@@ -9652,6 +9652,63 @@ async fn cleanup_narration_temps(paths: &[String]) {
 /// and returns an exact scene timeline. The agent uses those timings for the
 /// HyperFrames `data-start` / `data-duration` attributes, so scene changes can
 /// never outrun the narration.
+/// Synthesize one narration line with the full provider chain.
+///
+/// `generate_narration` used to be VibeVoice-only: when the CPU worker queued
+/// out it burned 3 attempts × 240 s per line and then aborted the whole
+/// storyboard. Now it falls through to the keyless provider, and when
+/// `KEYLESS_TTS_FIRST=1` it skips the slow microservice entirely.
+async fn synthesize_narration_line(
+    vibevoice: Option<&crate::vibevoice_client::VibeVoiceClient>,
+    line: &str,
+    voice: &str,
+    metadata: &Value,
+    keyless_lang: &str,
+    keyless_first: bool,
+) -> Result<Vec<u8>, String> {
+    let mut last_error = String::new();
+
+    if keyless_first {
+        match crate::keyless_tts::synthesize(line, keyless_lang).await {
+            Ok(bytes) if bytes.len() >= 1_000 => return Ok(bytes),
+            Ok(bytes) => last_error = format!("keyless TTS returned only {} bytes", bytes.len()),
+            Err(e) => last_error = format!("keyless TTS: {e}"),
+        }
+    }
+
+    if let Some(client) = vibevoice {
+        for attempt in 0..3 {
+            match client
+                .text_to_speech_base64(line, voice, "mp3", None, Some(metadata.clone()))
+                .await
+            {
+                Ok(bytes) if bytes.len() >= 1_000 => return Ok(bytes),
+                Ok(bytes) => last_error = format!("only {} bytes of audio", bytes.len()),
+                Err(e) => last_error = e.to_string(),
+            }
+            if attempt < 2 {
+                tokio::time::sleep(Duration::from_secs(5 * (attempt as u64 + 1))).await;
+            }
+        }
+    }
+
+    if !keyless_first && crate::keyless_tts::enabled() {
+        match crate::keyless_tts::synthesize(line, keyless_lang).await {
+            Ok(bytes) if bytes.len() >= 1_000 => return Ok(bytes),
+            Ok(bytes) => {
+                last_error = format!("{last_error}; keyless TTS only {} bytes", bytes.len())
+            }
+            Err(e) => last_error = format!("{last_error}; keyless TTS: {e}"),
+        }
+    }
+
+    Err(if last_error.is_empty() {
+        "no TTS provider available".to_string()
+    } else {
+        last_error
+    })
+}
+
 async fn execute_generate_narration_with_state(args: &Value, ctx: &ToolExecutionContext) -> String {
     // NIM providers sometimes serialize the array as a string or use
     // {text: ...} objects. Accept all three shapes so one bad-shaped call does
@@ -9708,10 +9765,12 @@ async fn execute_generate_narration_with_state(args: &Value, ctx: &ToolExecution
         .unwrap_or(0.35)
         .clamp(0.0, 2.0);
 
-    let Some(client) = ctx.app_state.vibevoice_client.as_ref() else {
-        return "❌ generate_narration needs the VibeVoice client (VIBEVOICE_SERVICE_URL)"
+    let keyless_lang = crate::keyless_tts::lang_for_voice(&voice);
+    let keyless_first = crate::keyless_tts::first() && crate::keyless_tts::enabled();
+    if ctx.app_state.vibevoice_client.is_none() && !crate::keyless_tts::enabled() {
+        return "❌ generate_narration needs a TTS provider (VIBEVOICE_SERVICE_URL or keyless TTS)"
             .to_string();
-    };
+    }
 
     let run_id = uuid::Uuid::new_v4();
     let mut temp_paths: Vec<String> = Vec::new();
@@ -9724,37 +9783,24 @@ async fn execute_generate_narration_with_state(args: &Value, ctx: &ToolExecution
             "line": idx,
         });
         // The persistent TTS service can be briefly saturated when several
-        // sample packs render at once. Retry the line instead of aborting the
-        // whole storyboard and sending the agent down a broken fallback path.
-        let mut bytes_opt: Option<Vec<u8>> = None;
-        let mut last_error = String::new();
-        for attempt in 0..3 {
-            match client
-                .text_to_speech_base64(line, &voice, "mp3", None, Some(metadata.clone()))
-                .await
-            {
-                Ok(bytes) if bytes.len() >= 1_000 => {
-                    bytes_opt = Some(bytes);
-                    break;
-                }
-                Ok(bytes) => {
-                    last_error = format!("only {} bytes of audio", bytes.len());
-                }
-                Err(e) => {
-                    last_error = e.to_string();
-                }
+        // sample packs render at once, and its CPU worker can sit in queue for
+        // minutes. The chain therefore ends in the keyless provider instead of
+        // aborting the whole storyboard.
+        let bytes = match synthesize_narration_line(
+            ctx.app_state.vibevoice_client.as_ref(),
+            line,
+            &voice,
+            &metadata,
+            &keyless_lang,
+            keyless_first,
+        )
+        .await
+        {
+            Ok(bytes) => bytes,
+            Err(e) => {
+                cleanup_narration_temps(&temp_paths).await;
+                return format!("❌ Narration line {} failed: {}", idx + 1, e);
             }
-            if attempt < 2 {
-                tokio::time::sleep(Duration::from_secs(5 * (attempt as u64 + 1))).await;
-            }
-        }
-        let Some(bytes) = bytes_opt else {
-            cleanup_narration_temps(&temp_paths).await;
-            return format!(
-                "❌ Narration line {} failed after 3 attempts: {}",
-                idx + 1,
-                last_error
-            );
         };
 
         let path = format!("outputs/narration_{run_id}_{idx}.mp3");
