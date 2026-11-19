@@ -9883,6 +9883,45 @@ async fn execute_generate_narration_with_state(args: &Value, ctx: &ToolExecution
     )
 }
 
+/// Fourth TTS provider: keyless HTTP endpoint (Google Translate).
+///
+/// Returns `Some("✅ ...")` when audio was written, `None` when disabled or the
+/// fallback failed (callers then keep whatever error the paid providers gave).
+async fn try_keyless_tts(text: &str, output_file: &str, voice: &str) -> Option<String> {
+    if !crate::keyless_tts::enabled() {
+        return None;
+    }
+    let output_file = ensure_outputs_directory(output_file);
+    if output_file.is_empty() {
+        return None;
+    }
+    let lang = crate::keyless_tts::lang_for_voice(voice);
+    match crate::keyless_tts::synthesize(text, &lang).await {
+        Ok(bytes) if !bytes.is_empty() => match tokio::fs::write(&output_file, &bytes).await {
+            Ok(_) => {
+                tracing::info!(
+                    "🎙️ keyless TTS (lang={}) wrote {} bytes → {}",
+                    lang,
+                    bytes.len(),
+                    output_file
+                );
+                Some(format!(
+                    "✅ Generated speech using keyless TTS ({lang}) and saved to: {output_file}"
+                ))
+            }
+            Err(e) => {
+                tracing::warn!("keyless TTS: cannot write {output_file}: {e}");
+                None
+            }
+        },
+        Ok(_) => None,
+        Err(e) => {
+            tracing::warn!("keyless TTS failed: {e}");
+            None
+        }
+    }
+}
+
 /// Generate text-to-speech using Eleven Labs (Claude version)
 async fn execute_generate_text_to_speech_with_state_claude(
     args: &Value,
@@ -9933,6 +9972,15 @@ async fn execute_generate_text_to_speech_with_state_claude(
         }
     }
 
+    // Fourth provider, opt-in first position: the VibeVoice CPU worker can sit
+    // in its queue for minutes before timing out, so a healthy keyless path is
+    // worth trying before burning the render budget on it.
+    if crate::keyless_tts::first() {
+        if let Some(msg) = try_keyless_tts(text, &*output_file, voice).await {
+            return msg;
+        }
+    }
+
     if let Some(ref vibevoice_client) = ctx.app_state.vibevoice_client {
         tracing::info!("🎤 generate_text_to_speech: Trying VibeVoice microservice");
         let metadata = serde_json::json!({
@@ -9965,8 +10013,15 @@ async fn execute_generate_text_to_speech_with_state_claude(
         }
     }
 
-    // Fallback to Gemini TTS
-    execute_generate_text_to_speech_claude(args).await
+    // Last resort: Gemini-class provider, then the keyless HTTP fallback.
+    let result = execute_generate_text_to_speech_claude(args).await;
+    if !result.starts_with('❌') && !result.starts_with("Error") {
+        return result;
+    }
+    if let Some(msg) = try_keyless_tts(text, output_file, voice).await {
+        return msg;
+    }
+    result
 }
 
 /// Generate text-to-speech using Eleven Labs (Gemini version)
@@ -10023,6 +10078,15 @@ async fn execute_generate_text_to_speech_with_state_gemini(
         }
     }
 
+    // Fourth provider, opt-in first position: the VibeVoice CPU worker can sit
+    // in its queue for minutes before timing out, so a healthy keyless path is
+    // worth trying before burning the render budget on it.
+    if crate::keyless_tts::first() {
+        if let Some(msg) = try_keyless_tts(text, &*output_file, voice).await {
+            return msg;
+        }
+    }
+
     if let Some(ref vibevoice_client) = ctx.app_state.vibevoice_client {
         tracing::info!("🎤 generate_text_to_speech: Trying VibeVoice microservice");
         let metadata = serde_json::json!({
@@ -10055,8 +10119,15 @@ async fn execute_generate_text_to_speech_with_state_gemini(
         }
     }
 
-    // Fallback to Gemini TTS
-    execute_generate_text_to_speech_gemini(args).await
+    // Last resort: Gemini-class provider, then the keyless HTTP fallback.
+    let result = execute_generate_text_to_speech_gemini(args).await;
+    if !result.starts_with('❌') && !result.starts_with("Error") {
+        return result;
+    }
+    if let Some(msg) = try_keyless_tts(text, &output_file, voice).await {
+        return msg;
+    }
+    result
 }
 
 /// Generate sound effect using Eleven Labs (Claude version)

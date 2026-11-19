@@ -23,6 +23,7 @@ mod gemini_client;
 mod handlers;
 mod hyperframes_client; // 🎬 HyperFrames — CPU headless-Chrome rendering (education + landing_page)
 mod jobs; // 🆕 Background job system for video editing
+mod keyless_tts; // 🎙️ Fourth TTS provider — keyless HTTP fallback when ElevenLabs/VibeVoice/Gemini are down
 mod kick_client; // 📺 Kick.com API client
 mod kick_vod_scraper; // 🎥 Kick VOD video list + HLS stream URL extraction (via BrowserBase)
 mod llm_utils;
