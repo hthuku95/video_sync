@@ -176,8 +176,15 @@ impl StorageRouter {
         }
     }
 
-    pub async fn upload_bytes(&self, key: &str, data: &[u8], content_type: &str) -> Result<String, String> {
-        self.upload_bytes_tracked(key, data, content_type).await.map(|(_, url)| url)
+    pub async fn upload_bytes(
+        &self,
+        key: &str,
+        data: &[u8],
+        content_type: &str,
+    ) -> Result<String, String> {
+        self.upload_bytes_tracked(key, data, content_type)
+            .await
+            .map(|(_, url)| url)
     }
 
     pub async fn upload_bytes_tracked(
@@ -212,7 +219,9 @@ impl StorageRouter {
     }
 
     pub async fn upload_file(&self, local_path: &str, key: &str) -> Result<String, String> {
-        self.upload_file_tracked(local_path, key).await.map(|(_, url)| url)
+        self.upload_file_tracked(local_path, key)
+            .await
+            .map(|(_, url)| url)
     }
 
     pub async fn upload_file_tracked(
@@ -222,7 +231,10 @@ impl StorageRouter {
     ) -> Result<(StorageBackend, String), String> {
         let backend = self.upload_tracked(local_path, key).await?;
         // Presign from the backend we just wrote to — no probe needed.
-        let url = self.client_for(backend).presign_get(key, 7 * 24 * 3600).await?;
+        let url = self
+            .client_for(backend)
+            .presign_get(key, 7 * 24 * 3600)
+            .await?;
         Ok((backend, url))
     }
 
@@ -281,12 +293,14 @@ impl StorageRouter {
             return self.primary.presign_get(key, expires_secs).await;
         }
         if let Some(fb) = self.fallback.as_ref() {
-            if fb.exists(key).await {
-                return fb.presign_get(key, expires_secs).await;
-            }
+            // The fallback IS the real backend whenever the primary is down
+            // (R2 is intentionally disabled in production). Do NOT gate on
+            // `fb.exists()`: HEAD is a Class-B transaction that storage caps
+            // can deny, and falling through to the primary below would hand
+            // out a dead R2 URL (Nov 2026 B2 cap incident).
+            return fb.presign_get(key, expires_secs).await;
         }
-        // Last resort: presign from primary (returns a URL even if the object
-        // is missing, matching the previous single-backend behaviour).
+        // No fallback configured: historic single-backend behaviour.
         self.primary.presign_get(key, expires_secs).await
     }
 
@@ -296,7 +310,9 @@ impl StorageRouter {
         backend: StorageBackend,
         expires_secs: u64,
     ) -> Result<String, String> {
-        self.client_for(backend).presign_get(key, expires_secs).await
+        self.client_for(backend)
+            .presign_get(key, expires_secs)
+            .await
     }
 
     pub async fn stream_object(
@@ -367,8 +383,24 @@ impl StorageRouter {
         Err(last_err.unwrap_or_else(|| format!("delete failed for {key}: no backend available")))
     }
 
-    pub async fn list_keys(&self, prefix: Option<&str>, max_keys: i32) -> Result<Vec<String>, String> {
-        self.primary.list_keys(prefix, max_keys).await
+    pub async fn list_keys(
+        &self,
+        prefix: Option<&str>,
+        max_keys: i32,
+    ) -> Result<Vec<String>, String> {
+        if self.primary_healthy() {
+            match self.primary.list_keys(prefix, max_keys).await {
+                Ok(v) => return Ok(v),
+                Err(e) => {
+                    tracing::warn!("R2 list_keys failed ({e}) — trying S3 fallback");
+                    self.mark_primary_down();
+                }
+            }
+        }
+        match self.fallback.as_ref() {
+            Some(fb) => fb.list_keys(prefix, max_keys).await,
+            None => self.primary.list_keys(prefix, max_keys).await,
+        }
     }
 
     pub async fn health_check(&self) -> bool {
@@ -390,21 +422,37 @@ impl StorageRouter {
 /// wiring in `main.rs`. Returns `None` when the R2 primary is not configured.
 /// Used by code paths that need a client without an `AppState` handle.
 pub async fn router_from_env() -> Option<Arc<StorageRouter>> {
-    let endpoint = std::env::var("R2_ENDPOINT").ok().filter(|v| !v.is_empty())?;
-    let access_key = std::env::var("R2_ACCESS_KEY_ID").ok().filter(|v| !v.is_empty())?;
-    let secret_key = std::env::var("R2_SECRET_ACCESS_KEY").ok().filter(|v| !v.is_empty())?;
+    let endpoint = std::env::var("R2_ENDPOINT")
+        .ok()
+        .filter(|v| !v.is_empty())?;
+    let access_key = std::env::var("R2_ACCESS_KEY_ID")
+        .ok()
+        .filter(|v| !v.is_empty())?;
+    let secret_key = std::env::var("R2_SECRET_ACCESS_KEY")
+        .ok()
+        .filter(|v| !v.is_empty())?;
     let bucket = std::env::var("R2_BUCKET").ok().filter(|v| !v.is_empty())?;
 
-    let primary = Arc::new(R2Client::new(&endpoint, &access_key, &secret_key, &bucket).await.ok()?);
+    let primary = Arc::new(
+        R2Client::new(&endpoint, &access_key, &secret_key, &bucket)
+            .await
+            .ok()?,
+    );
 
-    let fallback = match std::env::var("S3_FALLBACK_BUCKET").ok().filter(|b| !b.is_empty()) {
+    let fallback = match std::env::var("S3_FALLBACK_BUCKET")
+        .ok()
+        .filter(|b| !b.is_empty())
+    {
         Some(s3_bucket) => {
             let region = std::env::var("S3_REGION")
                 .ok()
                 .or_else(|| std::env::var("AWS_REGION").ok())
                 .filter(|r| !r.is_empty())
                 .unwrap_or_else(|| "us-east-1".to_string());
-            R2Client::new_aws_s3(&s3_bucket, &region).await.ok().map(Arc::new)
+            R2Client::new_aws_s3(&s3_bucket, &region)
+                .await
+                .ok()
+                .map(Arc::new)
         }
         None => None,
     };
@@ -435,10 +483,7 @@ pub fn object_key_from_url(url: &str, known_buckets: &[&str]) -> Option<String> 
     let parsed = reqwest::Url::parse(url).ok()?;
     let host = parsed.host_str().unwrap_or_default().to_ascii_lowercase();
 
-    let segments: Vec<&str> = parsed
-        .path_segments()?
-        .filter(|s| !s.is_empty())
-        .collect();
+    let segments: Vec<&str> = parsed.path_segments()?.filter(|s| !s.is_empty()).collect();
     if segments.is_empty() {
         return None;
     }
@@ -464,9 +509,8 @@ pub fn object_key_from_url(url: &str, known_buckets: &[&str]) -> Option<String> 
 
     // 3) Path-style AWS S3 endpoint (host is the service, not a bucket):
     //    s3.amazonaws.com | s3.<region>.amazonaws.com | s3-<region>.amazonaws.com
-    let host_is_path_style_s3 = host == "s3.amazonaws.com"
-        || host.starts_with("s3.")
-        || host.starts_with("s3-");
+    let host_is_path_style_s3 =
+        host == "s3.amazonaws.com" || host.starts_with("s3.") || host.starts_with("s3-");
     if host_is_path_style_s3 && segments.len() >= 2 {
         return Some(segments[1..].join("/"));
     }
@@ -485,10 +529,7 @@ pub fn object_key_from_url(url: &str, known_buckets: &[&str]) -> Option<String> 
 pub fn bucket_and_key_from_url(url: &str) -> Option<(String, String)> {
     let parsed = reqwest::Url::parse(url).ok()?;
     let host = parsed.host_str().unwrap_or_default().to_ascii_lowercase();
-    let segments: Vec<&str> = parsed
-        .path_segments()?
-        .filter(|s| !s.is_empty())
-        .collect();
+    let segments: Vec<&str> = parsed.path_segments()?.filter(|s| !s.is_empty()).collect();
     if segments.is_empty() {
         return None;
     }
@@ -504,7 +545,11 @@ pub fn bucket_and_key_from_url(url: &str) -> Option<(String, String)> {
         }
         let bucket = segments[0].to_string();
         let key = segments[1..].join("/");
-        return if key.is_empty() { None } else { Some((bucket, key)) };
+        return if key.is_empty() {
+            None
+        } else {
+            Some((bucket, key))
+        };
     }
 
     // Virtual-hosted "<bucket>.s3..."/"<bucket>.<account>.r2..." → bucket = host label.

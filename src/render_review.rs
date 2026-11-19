@@ -1326,6 +1326,26 @@ async fn download_to_temp(
             return Ok(None);
         }
     };
+    if !response.status().is_success() {
+        // A capped/denied storage backend returns a small XML/HTML error body
+        // with a 200-looking read path. Never treat that as media — QA would
+        // "analyse" the error page and report phantom defects (Nov 2026 B2 cap).
+        let status = response.status();
+        let snippet = response
+            .text()
+            .await
+            .unwrap_or_default()
+            .chars()
+            .take(160)
+            .collect::<String>();
+        tracing::warn!(
+            "QA download blocked (HTTP {}): {} — skipping media review. Body: {}",
+            status,
+            output_url,
+            snippet
+        );
+        return Ok(None);
+    }
     let bytes = response.bytes().await.unwrap_or_default().to_vec();
     if bytes.is_empty() {
         return Ok(None);

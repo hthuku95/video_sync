@@ -441,6 +441,22 @@ async fn resolve_local_video(video: &str) -> Result<PathBuf, String> {
             .await
             .map_err(|_| "video download timed out (120s)".to_string())?
             .map_err(|e| format!("video download failed: {e}"))?;
+        // Storage caps / auth failures return an error body with a 4xx status.
+        // Without this check the XML body was written as a ".mp4" and every
+        // downstream ffprobe reported "no video stream" (Nov 2026 B2 cap).
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let snippet = resp
+                .text()
+                .await
+                .unwrap_or_default()
+                .chars()
+                .take(160)
+                .collect::<String>();
+            return Err(format!(
+                "video download blocked (HTTP {status}) — storage read denied for {video}: {snippet}"
+            ));
+        }
         let bytes = resp
             .bytes()
             .await

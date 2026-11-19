@@ -1019,6 +1019,22 @@ impl AgenticServicePipeline {
             let dl = reqwest::get(&final_path).await.map_err(|e| {
                 format!("publish_output: cannot fetch agent-uploaded artifact: {e}")
             })?;
+            // A storage-cap / auth denial returns a small XML body with 403.
+            // Downloading it as ".mp4" made validation report a phantom
+            // "NO video stream" (Nov 2026 B2 cap). Fail loudly and correctly.
+            if !dl.status().is_success() {
+                let status = dl.status();
+                let snippet = dl
+                    .text()
+                    .await
+                    .unwrap_or_default()
+                    .chars()
+                    .take(160)
+                    .collect::<String>();
+                return Err(format!(
+                    "publish_output: agent-uploaded artifact download blocked (HTTP {status}) — {final_path}: {snippet}"
+                ));
+            }
             let bytes = dl
                 .bytes()
                 .await
