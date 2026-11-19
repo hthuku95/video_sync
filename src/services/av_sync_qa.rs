@@ -435,6 +435,16 @@ fn seg_verdict(seg: &Segment, verdict: &'static str, detail: &str) -> SegmentVer
 
 async fn resolve_local_video(video: &str) -> Result<PathBuf, String> {
     if video.starts_with("http://") || video.starts_with("https://") {
+        // Same-process fast path: if this process uploaded the object moments
+        // ago, the local file is still on disk. Reuse it — no egress, and it
+        // keeps working when the storage backend's download cap is exhausted.
+        if let Some(local) = crate::cloud_storage::lookup_local_artifact(video) {
+            tracing::info!(
+                "resolve_local_video: reusing local artifact {} (no download)",
+                local
+            );
+            return Ok(PathBuf::from(local));
+        }
         // Bounded download (same discipline as render_review: an unbounded GET
         // once wedged QA for 35+ minutes).
         let resp = tokio::time::timeout(std::time::Duration::from_secs(120), reqwest::get(video))

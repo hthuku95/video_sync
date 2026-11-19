@@ -1015,38 +1015,48 @@ impl AgenticServicePipeline {
         let mut agent_uploaded = false;
         if final_path.starts_with("https://") {
             agent_uploaded = true;
-            let tmp = format!("/tmp/publish_{}.mp4", uuid::Uuid::new_v4());
-            let dl = reqwest::get(&final_path).await.map_err(|e| {
-                format!("publish_output: cannot fetch agent-uploaded artifact: {e}")
-            })?;
-            // A storage-cap / auth denial returns a small XML body with 403.
-            // Downloading it as ".mp4" made validation report a phantom
-            // "NO video stream" (Nov 2026 B2 cap). Fail loudly and correctly.
-            if !dl.status().is_success() {
-                let status = dl.status();
-                let snippet = dl
-                    .text()
+            // Same-process fast path: the agent uploaded this artifact moments
+            // ago from a local file that is still on disk. Reuse it instead of
+            // downloading it back — B2 egress is our scarcest resource and the
+            // account's download cap has been exhausted (Nov 2026).
+            if let Some(local) = crate::cloud_storage::lookup_local_artifact(&final_path) {
+                tracing::info!(
+                    "publish_output: reusing local artifact {local} — skipping cloud download"
+                );
+                final_path = local;
+            } else {
+                let tmp = format!("/tmp/publish_{}.mp4", uuid::Uuid::new_v4());
+                let dl = reqwest::get(&final_path).await.map_err(|e| {
+                    format!("publish_output: cannot fetch agent-uploaded artifact: {e}")
+                })?;
+                // A storage-cap / auth denial returns a small XML body with 403.
+                // Downloading it as ".mp4" made validation report a phantom
+                // "NO video stream" (Nov 2026 B2 cap). Fail loudly and correctly.
+                if !dl.status().is_success() {
+                    let status = dl.status();
+                    let snippet = dl
+                        .text()
+                        .await
+                        .unwrap_or_default()
+                        .chars()
+                        .take(160)
+                        .collect::<String>();
+                    return Err(format!(
+                        "publish_output: agent-uploaded artifact download blocked (HTTP {status}) — {final_path}: {snippet}"
+                    ));
+                }
+                let bytes = dl.bytes().await.map_err(|e| {
+                    format!("publish_output: cannot read agent-uploaded artifact: {e}")
+                })?;
+                tokio::fs::write(&tmp, &bytes)
                     .await
-                    .unwrap_or_default()
-                    .chars()
-                    .take(160)
-                    .collect::<String>();
-                return Err(format!(
-                    "publish_output: agent-uploaded artifact download blocked (HTTP {status}) — {final_path}: {snippet}"
-                ));
+                    .map_err(|e| format!("publish_output: cannot stage agent artifact: {e}"))?;
+                tracing::info!(
+                    "publish_output: agent-uploaded artifact pulled down for validation ({} bytes)",
+                    bytes.len()
+                );
+                final_path = tmp;
             }
-            let bytes = dl
-                .bytes()
-                .await
-                .map_err(|e| format!("publish_output: cannot read agent-uploaded artifact: {e}"))?;
-            tokio::fs::write(&tmp, &bytes)
-                .await
-                .map_err(|e| format!("publish_output: cannot stage agent artifact: {e}"))?;
-            tracing::info!(
-                "publish_output: agent-uploaded artifact pulled down for validation ({} bytes)",
-                bytes.len()
-            );
-            final_path = tmp;
         }
 
         // Always publish under OUR storage key (validation + repair happened above)
@@ -1179,6 +1189,10 @@ impl AgenticServicePipeline {
                 .upload_file_tracked(&final_path, &output_key)
                 .await
                 .map_err(|e| format!("Object storage upload failed: {e}"))?;
+            // Register the canonical artifact for same-process readers (QA,
+            // education YouTube upload) so they read the local file instead of
+            // re-downloading the published object from B2.
+            crate::cloud_storage::register_local_artifact(&output_key, &final_path);
             tracing::info!(
                 backend = backend.as_str(),
                 key = %output_key,

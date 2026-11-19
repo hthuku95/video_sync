@@ -1310,6 +1310,27 @@ async fn download_to_temp(
     if !output_url.starts_with("http://") && !output_url.starts_with("https://") {
         return Ok(None);
     }
+    // Same-process fast path: reuse the file this process just uploaded rather
+    // than paying egress to download it back (B2 download cap, Nov 2026).
+    if let Some(local) = crate::cloud_storage::lookup_local_artifact(output_url) {
+        let path = PathBuf::from(&local);
+        match std::fs::read(&path) {
+            Ok(bytes) if !bytes.is_empty() => {
+                tracing::debug!(
+                    url = %output_url,
+                    path = %path.display(),
+                    "QA: reusing local artifact (no download)"
+                );
+                return Ok(Some((path, bytes)));
+            }
+            _ => {
+                tracing::warn!(
+                    "QA: registered local artifact {} unreadable — falling back to download",
+                    path.display()
+                );
+            }
+        }
+    }
     // Bounded: an unbounded GET wedged QA review for 35+ minutes (E2E-I) with a
     // live heartbeat and zero trace events. On timeout the review degrades to
     // reduced evidence instead of hanging the whole attempt.

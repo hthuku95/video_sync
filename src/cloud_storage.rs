@@ -1,6 +1,69 @@
 use crate::AppState;
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex, OnceLock};
 use uuid::Uuid;
+
+/// Process-local map: object key → local file it was uploaded from.
+///
+/// Lets downstream stages in the *same process* (publish validation, QA frame
+/// sampling, the education YouTube upload) read the bytes that are still on
+/// disk instead of downloading the object back. Object storage egress is a
+/// capped, metered resource (B2 download cap, Nov 2026), and one render was
+/// paying for 3–4 full re-downloads of its own output.
+static LOCAL_ARTIFACTS: OnceLock<Mutex<HashMap<String, (String, std::time::SystemTime)>>> =
+    OnceLock::new();
+
+const LOCAL_ARTIFACT_MAX_ENTRIES: usize = 64;
+const LOCAL_ARTIFACT_MAX_AGE_SECS: u64 = 24 * 3600;
+
+fn artifact_registry() -> &'static Mutex<HashMap<String, (String, std::time::SystemTime)>> {
+    LOCAL_ARTIFACTS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Remember that `key` was uploaded from `local_path` in this process.
+pub fn register_local_artifact(key: &str, local_path: &str) {
+    let now = std::time::SystemTime::now();
+    let mut map = match artifact_registry().lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    if map.len() >= LOCAL_ARTIFACT_MAX_ENTRIES {
+        if let Some(oldest) = map
+            .iter()
+            .min_by_key(|(_, (_, at))| *at)
+            .map(|(k, _)| k.clone())
+        {
+            map.remove(&oldest);
+        }
+    }
+    map.insert(key.to_string(), (local_path.to_string(), now));
+}
+
+/// Resolve a cloud URL (or bare storage key) to a local file that was uploaded
+/// from this process and still exists. Returns `None` when unknown, stale
+/// (>24h) or the file is gone — callers then fall back to a real download.
+pub fn lookup_local_artifact(url_or_key: &str) -> Option<String> {
+    let key = if url_or_key.starts_with("http://") || url_or_key.starts_with("https://") {
+        crate::storage::bucket_and_key_from_url(url_or_key)?.1
+    } else {
+        url_or_key.to_string()
+    };
+    let map = match artifact_registry().lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    let (path, registered_at) = map.get(&key)?;
+    let meta = std::fs::metadata(path).ok()?;
+    if meta.len() == 0 {
+        return None;
+    }
+    if let Ok(age) = registered_at.elapsed() {
+        if age.as_secs() > LOCAL_ARTIFACT_MAX_AGE_SECS {
+            return None;
+        }
+    }
+    Some(path.clone())
+}
 
 /// Upload bytes directly to R2, register in GeneratedArtifactService,
 /// and return a presigned download URL. No local disk write.
@@ -201,7 +264,7 @@ pub async fn upload_local_file_to_cloud(
         format!("generated/{user_id}/{session_slug}/{file_name}")
     };
 
-    upload_bytes_to_cloud(
+    let url = upload_bytes_to_cloud(
         bytes,
         &object_key,
         content_type,
@@ -210,7 +273,11 @@ pub async fn upload_local_file_to_cloud(
         workflow_id,
         app_state,
     )
-    .await
+    .await?;
+    // Keep the local file reachable for this process so downstream stages do
+    // not have to download the object they just uploaded.
+    register_local_artifact(&object_key, local_path);
+    Ok(url)
 }
 
 fn infer_kind_from_mime(mime: &str) -> &'static str {
