@@ -184,6 +184,34 @@ async fn schedule_due_jobs(state: &Arc<AppState>) -> Result<(), String> {
 // ── Executor ────────────────────────────────────────────────────────────────
 
 async fn run_due_jobs(state: &Arc<AppState>) -> Result<(), String> {
+    // ── PROCESSING BUDGET ───────────────────────────────────────────────────
+    // `education_daily_upload_budget` gated job *creation*, but a pre-existing
+    // backlog (47 queued jobs, Nov 2026) was still drained in one pass, burning
+    // NIM quota and B2 egress. Gate *starts* on the same rolling-24h budget so
+    // the owner's "1 education video per day" is enforced end to end.
+    let budget: i64 = sqlx::query_scalar::<_, String>(
+        "SELECT setting_value FROM system_settings WHERE setting_key = 'education_daily_upload_budget'",
+    )
+    .fetch_optional(&state.db_pool)
+    .await
+    .ok()
+    .flatten()
+    .and_then(|v| v.parse::<i64>().ok())
+    .unwrap_or(1)
+    .max(0);
+
+    let started_last_24h: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM education_post_jobs WHERE started_at > NOW() - INTERVAL '24 hours'",
+    )
+    .fetch_one(&state.db_pool)
+    .await
+    .unwrap_or(0);
+
+    let mut remaining = (budget - started_last_24h).max(0) as usize;
+    if remaining == 0 {
+        return Ok(());
+    }
+
     // ── RE-ADOPTION (checkpoint of the JOB state): 'generating' jobs whose
     // job-heartbeat is stale belong to a dead watcher — re-enter them with
     // resume=true (skip generation; wait on the existing workflow + upload).
@@ -200,17 +228,22 @@ async fn run_due_jobs(state: &Arc<AppState>) -> Result<(), String> {
     .fetch_all(&state.db_pool)
     .await
     .map_err(|e| e.to_string())?;
-    for (job_id, linkage_id, channel_id, topic) in stale {
+    for (job_id, linkage_id, channel_id, topic) in stale.into_iter().take(remaining) {
         tracing::warn!(job = %job_id, "🔄 re-adopting education job (watcher heartbeat stale)");
         execute_job(state.clone(), job_id, linkage_id, channel_id, topic).await;
+        remaining -= 1;
+        if remaining == 0 {
+            return Ok(());
+        }
     }
 
-    for _ in 0..MAX_CONCURRENT_GENERATIONS {
+    while remaining > 0 {
         let job = claim_next_job(state).await?;
         let Some((job_id, linkage_id, channel_id, topic)) = job else {
             break;
         };
         execute_job(state.clone(), job_id, linkage_id, channel_id, topic).await;
+        remaining -= 1;
     }
     Ok(())
 }
