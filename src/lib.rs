@@ -24,6 +24,7 @@ pub mod hyperframes_client;
 pub mod jobs;
 pub mod kick_client;
 pub mod kick_vod_scraper;
+pub mod keyless_tts;
 pub mod llm_utils;
 pub mod middleware;
 pub mod mns_client;
