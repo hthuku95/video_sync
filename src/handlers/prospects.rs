@@ -11150,7 +11150,12 @@ pub fn extract_meta_content_pub(html: &str, key: &str) -> Option<String> {
 }
 
 fn extract_meta_content(html: &str, key: &str) -> Option<String> {
-    let lower = html.to_lowercase();
+    // ASCII-only lowercasing keeps byte offsets identical to `html`. Full
+    // Unicode to_lowercase() can change byte lengths (e.g. 'İ' → "i̇") and the
+    // offsets found in the lowered copy then panic when used to slice `html`.
+    // This crashed the outreach batch worker on every boot (Nov 19 2026).
+    let lower = html.to_ascii_lowercase();
+    let key = key.to_ascii_lowercase();
     let needles = [
         format!("property=\"{}\"", key),
         format!("property='{}'", key),
@@ -11160,10 +11165,15 @@ fn extract_meta_content(html: &str, key: &str) -> Option<String> {
     let pos = needles.iter().find_map(|n| lower.find(n))?;
     // Look for content="..." within the same tag. Meta tags are typically
     // short so a local window works without a real HTML parser dep.
-    let window_end = (pos + 500).min(html.len());
+    // Clamp the window to a char boundary — pos + 500 can land mid-character
+    // on any page containing multibyte UTF-8 (most non-English sites).
+    let mut window_end = (pos + 500).min(html.len());
+    while window_end > pos && !html.is_char_boundary(window_end) {
+        window_end -= 1;
+    }
     let window = &html[pos..window_end];
-    // Find content=" or content='
-    let start = window.to_lowercase().find("content=")?;
+    // Find content=" or content=' (ASCII-lowercase: offsets stay aligned).
+    let start = window.to_ascii_lowercase().find("content=")?;
     let after = &window[start + "content=".len()..];
     let quote = after.chars().next()?;
     if quote != '"' && quote != '\'' {

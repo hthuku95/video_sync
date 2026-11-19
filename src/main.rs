@@ -900,7 +900,19 @@ async fn main() {
     // spawns its OWN background-lane claimers (see education_post_worker).
     // No env-driven lane assignment — the lane is determined by which module
     // spawns the claimers.
-    {
+    //
+    // The dedicated education worker must NOT claim interactive work: it
+    // intentionally runs without the main NVIDIA_API_KEY (education uses
+    // NVIDIA_API_KEY_EDUCATION), so any interactive workflow it claimed fell
+    // through to the dead Gemini/DeepSeek chain. Symptom Nov 18–19: 40/54
+    // prospect samples failed with "Gemini + DeepSeek both failed" while being
+    // claimed by fargate instances whose service had no main NIM key.
+    let education_worker_only = std::env::var("EDUCATION_WORKER").as_deref() == Ok("true");
+    if education_worker_only {
+        tracing::info!(
+            "🎓 education worker: skipping interactive-lane claimers (background lane is owned by the education module)"
+        );
+    } else {
         let pw_state = shared_state.clone();
         crate::services::pipeline_worker::start_pipeline_infrastructure(pw_state, "interactive");
     }
