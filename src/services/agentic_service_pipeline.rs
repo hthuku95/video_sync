@@ -1326,10 +1326,8 @@ Use the extracted content to understand:
 7. submit_final_answer(summary, output_files=[path]) — only after review passes
 
 ## TOOL FALLBACK CHAIN (if a rendering tool fails or is unavailable)
-- hyperframes_render (PRIMARY for all 2D motion graphics, VFX, kinetic typography, d3 charts, 3D-looking depth via CSS perspective, audio visualization) — CPU-rendered, always available on this deployment.
-- manim_execute_script (FALLBACK for math equations, diagrams, code animations, data charts, LaTeX formulas) — requires BlenderMCP backend. If it returns 'not configured' or fails, switch to hyperframes_render with HTML/CSS for simple math and d3 for charts.
-- blender_generate_scene_type / blender_execute_bpy_script (FALLBACK for true 3D CGI, product mockups, physics simulation) — requires GPU. Currently UNAVAILABLE on this deployment. If available and needed, use it; otherwise use hyperframes_render with CSS perspective/parallax for 3D-looking depth.
-- If ALL rendering tools fail, report the specific error and do NOT substitute a generated video or retry with unrelated tools.
+- hyperframes_render (PRIMARY and ONLY renderer on this deployment) — CPU-rendered, always available. Use it for EVERY scene: motion graphics, VFX, kinetic typography, d3 charts, 3D-looking depth via CSS perspective/parallax, equations via HTML/CSS + d3, diagrams, code animations, data charts, LaTeX-style formulas. There is NO Blender or Manim backend on this deployment — never call manim_execute_script, blender_generate_scene_type, or blender_execute_bpy_script; they will fail with connection refused.
+- If hyperframes_render fails, report the specific error and do NOT substitute a generated video or retry with unrelated tools.
 
 OUTPUT to: {output_dir}/
 Save your final video with .mp4 extension"#,
@@ -1432,8 +1430,7 @@ Before writing anything, research the topic using the web-crawling infrastructur
 2. generate_narration(lines=[...], voice="Emma", output_file="{out}/narration.mp3", gap_seconds=0.35) — synthesize the voice track and get the exact SCENE_TIMELINE_JSON. This is the clock for the whole lesson. Call it ONCE with all scene lines. If it errors, fix the arguments and retry once; do NOT fall back to per-line generate_text_to_speech and do NOT call auto_generate_video. Then SELF-CHECK density from SCENE_TIMELINE_JSON: (sum of scene speech durations ÷ {duration_seconds}) must be ≥ 0.6 (target 0.70–0.85) — if it is lower, rewrite the scene lines denser and re-run generate_narration BEFORE rendering anything.
 3. Render each scene to EXACTLY its timeline duration:
    - hyperframes_render(html=..., resolution=...) — for titles, kinetic typography, layouts, animated backgrounds, intro/outro sequences, and ALL 2D/3D motion graphics. You have FULL access to every HyperFrames feature — use them freely and creatively: 50+ cinematic VFX shaders (glitch, film grain, chromatic aberration, bloom, halftone, CRT, etc.), Slug GPU vector typography (word-by-word kinetic reveals), d3 animated charts and data visualizations, a unified 3D scene graph with glTF import and PBR materials, GSAP timelines, Lottie animation playback, audio visualization/reactive motion, transitions, masks, and CSS perspective/parallax. Pick whichever combination best serves the lesson content. Its root data-duration and scene data-start/data-duration MUST equal the timeline. CPU-rendered, no GPU needed. Implement EVERY feature named in each scene's plan — a scene whose HTML ignores its planned features is a quality failure.
-   - manim_execute_script(description=..., duration=<scene duration>, quality="h", include_narration=false) — for math equations, diagrams, code animations, data charts, LaTeX formulas. Trim/pad the result with trim_video or pad_video_time so it is exactly the scene duration.
-   - Blender and all 3D tools are UNAVAILABLE on this deployment (no GPU): NEVER call blender_generate_scene_type or blender_execute_bpy_script. Simulate 3D-looking depth with CSS perspective/parallax in hyperframes_render.
+   - Blender/Manim are UNAVAILABLE on this deployment: NEVER call manim_execute_script, blender_generate_scene_type, or blender_execute_bpy_script. Render equations, diagrams, code animations, data charts, and LaTeX-style formulas with hyperframes_render (HTML/CSS + d3). Simulate 3D-looking depth with CSS perspective/parallax.
    - Keep EVERY scene inside its own duration; when merging, preserve the narration timeline exactly.
 4. merge_videos the scene clips in narration order, then add_audio(input_file="{out}/merged.mp4", audio_file="{out}/narration.mp3", output_file="{out}/output.mp4"). Do NOT call add_voiceover_to_video in this service — it creates a second, unsynchronized track.
 5. POST-PRODUCTION (optional polish): add real transcribed captions via transcribe_audio_url (never placeholder text), brand/logo, color and subtle music. Never change scene boundaries or mask narration. Text must fit with safe margins; no cropped words, no overlapping titles/formulas.
@@ -1441,10 +1438,8 @@ Before writing anything, research the topic using the web-crawling infrastructur
 7. submit_final_answer(summary="education video {title}", output_files=["{out}/output.mp4"])
 
 ## TOOL FALLBACK CHAIN (if a rendering tool fails or is unavailable)
-- hyperframes_render (PRIMARY for all 2D motion graphics, VFX, kinetic typography, d3 charts, 3D-looking depth via CSS perspective, audio visualization) — CPU-rendered, always available on this deployment.
-- manim_execute_script (FALLBACK for math equations, diagrams, code animations, data charts, LaTeX formulas) — requires BlenderMCP backend. If it returns 'not configured' or fails, switch to hyperframes_render with HTML/CSS for simple math and d3 for charts.
-- blender_generate_scene_type / blender_execute_bpy_script (FALLBACK for true 3D CGI, product mockups, physics simulation) — requires GPU. Currently UNAVAILABLE on this deployment. If available and needed, use it; otherwise use hyperframes_render with CSS perspective/parallax for 3D-looking depth.
-- If ALL rendering tools fail, report the specific error and do NOT substitute a generated video or retry with unrelated tools.
+- hyperframes_render (PRIMARY and ONLY renderer on this deployment) — CPU-rendered, always available. Use it for EVERY scene: motion graphics, VFX, kinetic typography, d3 charts, 3D-looking depth via CSS perspective/parallax, equations via HTML/CSS + d3, diagrams, code animations, data charts, LaTeX-style formulas. There is NO Blender or Manim backend on this deployment — never call manim_execute_script, blender_generate_scene_type, or blender_execute_bpy_script; they will fail with connection refused.
+- If hyperframes_render fails, report the specific error and do NOT substitute a generated video or retry with unrelated tools.
 
 OUTPUT dir: {out}/"#,
             duration_seconds = input.duration_seconds as i32,
