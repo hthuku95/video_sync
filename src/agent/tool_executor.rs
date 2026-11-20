@@ -9921,7 +9921,13 @@ async fn execute_generate_narration_with_state(args: &Value, ctx: &ToolExecution
          Mux this file with add_audio(input_file=<rendered_video>, \
          audio_file=\"{output_file}\", output_file=<final_video>). \
          Do NOT call add_voiceover_to_video — that would generate a second, \
-         unsynchronized voice track.",
+         unsynchronized voice track.\n\n\
+         ⛔ THIS AUDIO FILE IS NOT THE DELIVERABLE. DO NOT STOP HERE AND DO NOT CALL submit_final_answer.\n\
+         NEXT REQUIRED ACTION: build the HyperFrames HTML scenes from SCENE_TIMELINE_JSON and call \
+         hyperframes_render (root data-duration=\"{actual_total:.3}\"), then \
+         add_audio(input_file=<render.mp4>, audio_file=\"{output_file}\", output_file=<final_video>.mp4), \
+         then review_video, then submit_final_answer with the .mp4. \
+         Publishing an audio-only file fails with ARTIFACT_INVALID: NO video stream.",
         serde_json::to_string_pretty(&scenes).unwrap_or_else(|_| "[]".to_string()),
         timing_snippet,
         actual_total = actual_total,
