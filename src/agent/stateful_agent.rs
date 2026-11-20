@@ -3099,7 +3099,7 @@ fn openai_messages_to_gemini_contents(
 // (set at workflow creation), so policy follows durable truth — no new flags,
 // no per-provider divergence, no signature changes. Single implementation used
 // by every live loop (qwen/nvidia/deepseek).
-const MAX_TOOL_NUDGES: usize = 2;
+const MAX_TOOL_NUDGES: usize = 3;
 
 /// How many times a provider may answer with an EMPTY message before the loop
 /// gives up. An empty `content` is not a final answer: OpenAI-compatible
@@ -3158,8 +3158,15 @@ async fn workflow_requires_artifacts(pool: &sqlx::PgPool, workflow_id: Option<uu
 /// Returns `Some(nudge)` when the loop must mandate tool calls and continue,
 /// `None` when the prose is acceptable as the final answer (chat semantics,
 /// salvaged artifact URLs present, nothing callable, or nudges exhausted).
-fn tool_mandate_nudge(text: &str, tools_empty: bool) -> Option<String> {
-    if tools_empty || text_contains_artifact_url(text) {
+fn tool_mandate_nudge(text: &str, tools_empty: bool, final_artifact_seen: bool) -> Option<String> {
+    if tools_empty {
+        return None;
+    }
+    // Once the terminal artifact (publish_output / submit_final_answer) has been
+    // produced, a prose reply that cites its URL is a legitimate final answer.
+    // Before that point, a URL in the prose (e.g. the narration.mp3 the model
+    // just generated) is NOT a finished deliverable — keep nudging.
+    if final_artifact_seen && text_contains_artifact_url(text) {
         return None;
     }
     Some(
@@ -3198,6 +3205,11 @@ where
     let mut nudges_used: usize = 0;
     let mut artifacts_required: Option<bool> = None;
     let mut empty_responses: usize = 0;
+    // Tracks whether a terminal artifact (publish_output / submit_final_answer)
+    // has been produced yet. While false, a text-only reply is treated as
+    // premature and nudged instead of being accepted as the final answer —
+    // this is what stops the agent from quitting after generate_narration.
+    let mut final_artifact_seen: bool = false;
 
     for turn in 0..max_turns {
         // Cooperative cancellation probe (durable pipeline runner).
@@ -3260,7 +3272,7 @@ where
                 // Unified policy: bare prose with zero tool calls ends the run
                 // ONLY for pure-chat runs. Artifact runs get a bounded tool
                 // mandate instead of a false "final answer".
-                if tool_calls_made == 0 && nudges_used < MAX_TOOL_NUDGES {
+                if !final_artifact_seen && nudges_used < MAX_TOOL_NUDGES {
                     let required = match artifacts_required {
                         Some(v) => v,
                         None => {
@@ -3274,7 +3286,7 @@ where
                         }
                     };
                     if required {
-                        if let Some(nudge) = tool_mandate_nudge(&text, tools.is_empty()) {
+                        if let Some(nudge) = tool_mandate_nudge(&text, tools.is_empty(), final_artifact_seen) {
                             nudges_used += 1;
                             tracing::warn!(
                                 "⚠️ Qwen answered in prose with zero tool calls (nudge {}/{}); mandating tools and continuing",
@@ -3300,6 +3312,11 @@ where
 
             crate::qwen_client::QwenResponse::ToolCalls(tool_calls) => {
                 tool_calls_made += tool_calls.len();
+                if tool_calls.iter().any(|tc| {
+                    tc.name == "publish_output" || tc.name == "submit_final_answer"
+                }) {
+                    final_artifact_seen = true;
+                }
                 let assistant_tool_calls: Vec<serde_json::Value> = tool_calls
                     .iter()
                     .map(|tc| {
@@ -3409,6 +3426,11 @@ where
     let mut nudges_used: usize = 0;
     let mut artifacts_required: Option<bool> = None;
     let mut empty_responses: usize = 0;
+    // Tracks whether a terminal artifact (publish_output / submit_final_answer)
+    // has been produced yet. While false, a text-only reply is treated as
+    // premature and nudged instead of being accepted as the final answer —
+    // this is what stops the agent from quitting after generate_narration.
+    let mut final_artifact_seen: bool = false;
 
     for turn in 0..max_turns {
         if workflow_cancel_requested(exec_context).await {
@@ -3467,7 +3489,7 @@ where
                 // Unified policy: bare prose with zero tool calls ends the run
                 // ONLY for pure-chat runs. Artifact runs get a bounded tool
                 // mandate instead of a false "final answer".
-                if tool_calls_made == 0 && nudges_used < MAX_TOOL_NUDGES {
+                if !final_artifact_seen && nudges_used < MAX_TOOL_NUDGES {
                     let required = match artifacts_required {
                         Some(v) => v,
                         None => {
@@ -3481,7 +3503,7 @@ where
                         }
                     };
                     if required {
-                        if let Some(nudge) = tool_mandate_nudge(&text, tools.is_empty()) {
+                        if let Some(nudge) = tool_mandate_nudge(&text, tools.is_empty(), final_artifact_seen) {
                             nudges_used += 1;
                             tracing::warn!(
                                 "⚠️ DeepSeek answered in prose with zero tool calls (nudge {}/{}); mandating tools and continuing",
@@ -3507,6 +3529,11 @@ where
 
             crate::deepseek_client::DeepSeekResponse::ToolCalls(tool_calls) => {
                 tool_calls_made += tool_calls.len();
+                if tool_calls.iter().any(|tc| {
+                    tc.name == "publish_output" || tc.name == "submit_final_answer"
+                }) {
+                    final_artifact_seen = true;
+                }
                 let assistant_tool_calls: Vec<serde_json::Value> = tool_calls
                     .iter()
                     .map(|tc| {
@@ -3607,6 +3634,11 @@ where
     let mut nudges_used: usize = 0;
     let mut artifacts_required: Option<bool> = None;
     let mut empty_responses: usize = 0;
+    // Tracks whether a terminal artifact (publish_output / submit_final_answer)
+    // has been produced yet. While false, a text-only reply is treated as
+    // premature and nudged instead of being accepted as the final answer —
+    // this is what stops the agent from quitting after generate_narration.
+    let mut final_artifact_seen: bool = false;
 
     for turn in 0..max_turns {
         if workflow_cancel_requested(exec_context).await {
@@ -3666,7 +3698,7 @@ where
                 // Unified policy: bare prose with zero tool calls ends the run
                 // ONLY for pure-chat runs. Artifact runs get a bounded tool
                 // mandate instead of a false "final answer".
-                if tool_calls_made == 0 && nudges_used < MAX_TOOL_NUDGES {
+                if !final_artifact_seen && nudges_used < MAX_TOOL_NUDGES {
                     let required = match artifacts_required {
                         Some(v) => v,
                         None => {
@@ -3680,7 +3712,7 @@ where
                         }
                     };
                     if required {
-                        if let Some(nudge) = tool_mandate_nudge(&text, tools.is_empty()) {
+                        if let Some(nudge) = tool_mandate_nudge(&text, tools.is_empty(), final_artifact_seen) {
                             nudges_used += 1;
                             tracing::warn!(
                                 "⚠️ NVIDIA NIM answered in prose with zero tool calls (nudge {}/{}); mandating tools and continuing",
@@ -3706,6 +3738,11 @@ where
 
             crate::nvidia_nim_client::NimResponse::ToolCalls(tool_calls) => {
                 tool_calls_made += tool_calls.len();
+                if tool_calls.iter().any(|tc| {
+                    tc.name == "publish_output" || tc.name == "submit_final_answer"
+                }) {
+                    final_artifact_seen = true;
+                }
                 let assistant_tool_calls: Vec<serde_json::Value> = tool_calls
                     .iter()
                     .map(|tc| {
