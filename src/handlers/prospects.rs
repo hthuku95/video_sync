@@ -4704,9 +4704,18 @@ pub(crate) async fn create_prospect_sample_pack_core(
                     .and_then(|v| v.parse().ok())
                     .unwrap_or(48_000);
                 let mut combined = crawl.combined_markdown.clone();
+                // Postgres JSONB rejects NUL bytes and lone surrogates in text
+                // columns (sqlx "unsupported Unicode escape sequence"). Scraped
+                // HTML/markdown can carry both; strip them before serializing.
+                combined = combined.replace('\u{0000}', "");
                 if combined.len() > crawl_cap {
                     combined.truncate(crawl_cap);
                     combined.push_str("\n[... crawl truncated at cap ...]");
+                }
+                // Re-check the boundary after truncation: a multi-byte char
+                // may have been split; trim to a valid UTF-8 boundary.
+                while !combined.is_char_boundary(combined.len()) && !combined.is_empty() {
+                    combined.pop();
                 }
                 ctx.push_str(&combined);
                 extra["scraped_website_content"] = json!(ctx);
