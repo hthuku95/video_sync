@@ -4435,6 +4435,34 @@ async fn generate_prospect_sample_pack(
 /// Core of the per-prospect sample-pack generation (shared by the admin
 /// handler AND the outreach batch worker — the worker passes no overrides).
 /// Returns the response JSON containing delivery_id on success.
+/// A sample delivery is reusable only while it is completed with output, or
+/// genuinely in flight (pending/running and created in the last 2 h).
+///
+/// The "already exists" short-circuit used to accept any `sample_delivery_id`,
+/// including failed ones. That pinned 107 prospects to dead Nov-18 deliveries:
+/// every retry re-read the same id, saw `failed`, and requeued without ever
+/// starting a new render.
+async fn sample_delivery_is_reusable(pool: &sqlx::PgPool, delivery_id: Uuid) -> bool {
+    let state: Option<(String, Option<String>, bool)> = sqlx::query_as(
+        "SELECT status, output_r2_url, created_at > NOW() - INTERVAL '2 hours'
+           FROM deliveries WHERE id = $1",
+    )
+    .bind(delivery_id)
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten();
+
+    match state {
+        Some((status, url, fresh)) => {
+            let s = status.to_ascii_lowercase();
+            (s == "completed" && url.is_some())
+                || (fresh && matches!(s.as_str(), "pending" | "running"))
+        }
+        None => false,
+    }
+}
+
 pub(crate) async fn create_prospect_sample_pack_core(
     state: Arc<AppState>,
     id: Uuid,
@@ -4502,16 +4530,24 @@ pub(crate) async fn create_prospect_sample_pack_core(
         .await;
     }
     if let Some(existing) = row.get::<Option<Uuid>, _>("sample_delivery_id") {
-        return Ok(Json(json!({
-            "success": true,
-            "delivery_id": existing.to_string(),
-            "delivery_url": format!(
-                "https://{}.videosync.ink/delivery/{}",
-                if assigned_app == "studio" { "studio" } else { app_subdomain_for_service(&service) },
-                existing
-            ),
-            "message": "Sample pack already exists for this prospect."
-        })));
+        if sample_delivery_is_reusable(&state.db_pool, existing).await {
+            return Ok(Json(json!({
+                "success": true,
+                "delivery_id": existing.to_string(),
+                "delivery_url": format!(
+                    "https://{}.videosync.ink/delivery/{}",
+                    if assigned_app == "studio" { "studio" } else { app_subdomain_for_service(&service) },
+                    existing
+                ),
+                "message": "Sample pack already exists for this prospect."
+            })));
+        }
+        // Dead/abandoned delivery — detach it so the code below creates a fresh
+        // render instead of returning a link that can never complete.
+        let _ = sqlx::query("UPDATE prospects SET sample_delivery_id = NULL WHERE id = $1")
+            .bind(id)
+            .execute(&state.db_pool)
+            .await;
     }
 
     let request = req.unwrap_or(GenerateProspectSamplePackRequest {
@@ -8096,22 +8132,31 @@ async fn instagram_generate_sample(
         .get::<Option<String>, _>("service_type")
         .unwrap_or_else(|| "landing_page".to_string());
     if let Some(existing) = row.get::<Option<uuid::Uuid>, _>("sample_delivery_id") {
-        let assigned = row
-            .get::<Option<serde_json::Value>, _>("contact_enrichment")
-            .and_then(|ce| {
-                ce.get("assigned_app")
-                    .and_then(|v| v.as_str().map(String::from))
-            });
-        return Json(json!({
-            "success":      true,
-            "delivery_id":  existing.to_string(),
-            "delivery_url": format!(
-                "https://{}.videosync.ink/delivery/{}",
-                assigned.as_deref().unwrap_or_else(|| app_subdomain_for_service(service_key.as_str())),
-                existing
-            ),
-            "message":      "Sample already exists for this lead.",
-        }));
+        if sample_delivery_is_reusable(&state.db_pool, existing).await {
+            let assigned = row
+                .get::<Option<serde_json::Value>, _>("contact_enrichment")
+                .and_then(|ce| {
+                    ce.get("assigned_app")
+                        .and_then(|v| v.as_str().map(String::from))
+                });
+            return Json(json!({
+                "success":      true,
+                "delivery_id":  existing.to_string(),
+                "delivery_url": format!(
+                    "https://{}.videosync.ink/delivery/{}",
+                    assigned.as_deref().unwrap_or_else(|| app_subdomain_for_service(service_key.as_str())),
+                    existing
+                ),
+                "message":      "Sample already exists for this lead.",
+            }));
+        }
+        // Dead/abandoned delivery — detach so a fresh render can start.
+        let _ = sqlx::query(
+            "UPDATE instagram_leads SET sample_delivery_id = NULL, updated_at = NOW() WHERE id = $1",
+        )
+        .bind(id)
+        .execute(&state.db_pool)
+        .await;
     }
 
     let username: String = row.get::<Option<String>, _>("username").unwrap_or_default();
