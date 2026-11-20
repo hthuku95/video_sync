@@ -72,11 +72,18 @@ pub async fn run_education_worker_loop(state: Arc<AppState>) {
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
         ticker.tick().await;
-        if let Err(e) = schedule_due_jobs(&state).await {
-            tracing::error!("education scheduler error: {e}");
-        }
-        if let Err(e) = run_due_jobs(&state).await {
-            tracing::error!("education executor error: {e}");
+        // Owner directive (Nov 20 2026): allow switching off the educational
+        // YouTube posting loop WITHOUT stopping the outreach/sample worker
+        // that shares this service. Default ON for backward compat.
+        if std::env::var("EDUCATION_POSTING_ENABLED").as_deref() != Ok("false") {
+            if let Err(e) = schedule_due_jobs(&state).await {
+                tracing::error!("education scheduler error: {e}");
+            }
+            if let Err(e) = run_due_jobs(&state).await {
+                tracing::error!("education executor error: {e}");
+            }
+        } else {
+            tracing::info!("🎓 Education posting DISABLED (EDUCATION_POSTING_ENABLED=false) — skipping schedule/execute");
         }
     }
 }
