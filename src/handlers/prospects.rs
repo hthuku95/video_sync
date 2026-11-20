@@ -8109,22 +8109,39 @@ async fn instagram_generate_sample(
     Json(req): Json<Option<GenerateSampleRequest>>,
 ) -> Json<serde_json::Value> {
     let user_id: i32 = claims.sub.parse().unwrap_or(0);
+    let is_admin = claims.is_superuser || claims.is_staff;
     let source_url = req.as_ref().and_then(|r| r.source_url.clone());
 
-    let row = match sqlx::query(
-        "SELECT username, full_name, bio, service_type, sample_delivery_id, external_url,
-                contact_enrichment
-         FROM instagram_leads WHERE id = $1 AND user_id = $2",
-    )
-    .bind(id)
-    .bind(user_id)
-    .fetch_optional(&state.db_pool)
-    .await
-    {
+    // Admins (and whitelisted ops users) can trigger samples for any lead,
+    // not just their own — needed for the sample-coverage sweep. Non-admins
+    // are still scoped to leads they own.
+    let row = if is_admin {
+        sqlx::query(
+            "SELECT username, full_name, bio, service_type, sample_delivery_id, external_url,
+                    contact_enrichment, user_id
+             FROM instagram_leads WHERE id = $1",
+        )
+        .bind(id)
+        .fetch_optional(&state.db_pool)
+        .await
+    } else {
+        sqlx::query(
+            "SELECT username, full_name, bio, service_type, sample_delivery_id, external_url,
+                    contact_enrichment, user_id
+             FROM instagram_leads WHERE id = $1 AND user_id = $2",
+        )
+        .bind(id)
+        .bind(user_id)
+        .fetch_optional(&state.db_pool)
+        .await
+    };
+    let row = match row {
         Ok(Some(r)) => r,
         Ok(None) => return Json(json!({"success": false, "error": "Lead not found"})),
         Err(e) => return Json(json!({"success": false, "error": format!("DB error: {}", e)})),
     };
+    // Use the lead's actual owner for any downstream user-scoped writes.
+    let user_id: i32 = row.get::<i32, _>("user_id");
 
     // If a sample is already attached, just return it — re-generating costs
     // money and the user wants the link to paste, not a fresh render.
