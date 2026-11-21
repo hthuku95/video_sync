@@ -1838,7 +1838,7 @@ pub async fn execute_tool_claude(name: &str, args: &Value) -> String {
         "talking_head_cleanup" => execute_talking_head_cleanup_claude(args),
         "export_video" => execute_export_video_claude(args),
         "blender_generate_scene_type" => execute_blender_generate_scene_type_claude(args).await,
-        "manim_execute_script" => execute_manim_execute_script_claude(args).await,
+        "manim_execute_script" => "manim_execute_script is PERMANENTLY DISABLED on this deployment (no BlenderMCP backend). Do NOT retry. Convert your scene to an HTML/CSS composition and call hyperframes_render directly.".to_string(),
         "download_asset" => execute_download_asset_claude(args).await,
 
         _ => format!("❌ Unknown tool: {}", name),
@@ -2265,7 +2265,7 @@ pub async fn execute_tool_gemini(name: &str, args: &HashMap<String, Value>) -> S
         "talking_head_cleanup" => execute_talking_head_cleanup_gemini(args),
         "export_video" => execute_export_video_gemini(args),
         "blender_generate_scene_type" => execute_blender_generate_scene_type_gemini(args).await,
-        "manim_execute_script" => execute_manim_execute_script_gemini(args).await,
+        "manim_execute_script" => "manim_execute_script is PERMANENTLY DISABLED. Do NOT retry. Use hyperframes_render with an HTML/CSS composition instead.".to_string(),
         "download_asset" => execute_download_asset_gemini(args).await,
 
         _ => format!("❌ Unknown tool: {}", name),
@@ -2510,13 +2510,31 @@ fn execute_extract_audio_claude(args: &Value) -> String {
     crate::audio::extract_audio(input, &output, format).unwrap_or_else(|e| e)
 }
 
+/// Resolve a file path: if it's a cloud URL, download to /tmp first.
+fn resolve_local_path(path: &str) -> String {
+    if path.is_empty() || !path.starts_with("http") {
+        return path.to_string();
+    }
+    let fname = path.split('/').last().unwrap_or("downloaded").split('?').next().unwrap_or("downloaded");
+    let local = format!("/tmp/{}", fname);
+    if std::path::Path::new(&local).exists() {
+        return local;
+    }
+    let status = std::process::Command::new("curl")
+        .args(["-sL", "-o", &local, path])
+        .status();
+    match status {
+        Ok(s) if s.success() => local,
+        _ => path.to_string(),
+    }
+}
+
 fn execute_add_audio_claude(args: &Value) -> String {
-    let input = args["input_file"].as_str().unwrap_or("");
+    let input = resolve_local_path(args["input_file"].as_str().unwrap_or(""));
     let output_raw = args["output_file"].as_str().unwrap_or("");
     let output = ensure_outputs_directory(output_raw);
-    let audio_file = args["audio_file"].as_str().unwrap_or("");
-    // Note: add_audio signature is (video, audio, output) - no replace parameter
-    crate::audio::add_audio(input, audio_file, &output).unwrap_or_else(|e| format!("❌ {}", e))
+    let audio_file = resolve_local_path(args["audio_file"].as_str().unwrap_or(""));
+    crate::audio::add_audio(&input, &audio_file, &output).unwrap_or_else(|e| format!("add_audio failed: {}", e))
 }
 
 fn execute_adjust_volume_claude(args: &Value) -> String {
@@ -3782,20 +3800,12 @@ fn execute_extract_audio_gemini(args: &HashMap<String, Value>) -> String {
 }
 
 fn execute_add_audio_gemini(args: &HashMap<String, Value>) -> String {
-    let input = args
-        .get("input_file")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
-    let output = args
-        .get("output_file")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
-    let audio_file = args
-        .get("audio_file")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
+    let input = resolve_local_path(args.get("input_file").and_then(|v| v.as_str()).unwrap_or(""));
+    let output_raw = args.get("output_file").and_then(|v| v.as_str()).unwrap_or("");
+    let output = ensure_outputs_directory(output_raw);
+    let audio_file = resolve_local_path(args.get("audio_file").and_then(|v| v.as_str()).unwrap_or(""));
     // Note: add_audio signature is (video, audio, output) - no replace parameter
-    crate::audio::add_audio(input, audio_file, output).unwrap_or_else(|e| format!("❌ {}", e))
+    crate::audio::add_audio(&input, &audio_file, &output).unwrap_or_else(|e| format!("add_audio failed: {}", e))
 }
 
 fn execute_adjust_volume_gemini(args: &HashMap<String, Value>) -> String {
@@ -21904,7 +21914,7 @@ fn execute_export_video_claude(args: &Value) -> String {
     command.arg("-c:v").arg(&codec).arg("-y").arg(output);
     match crate::utils::ffmpeg_utils::execute_ffmpeg_command(command) {
         Ok(s) => s,
-        Err(e) => format!("❌ export_video failed: {}", e),
+        Err(e) => format!("export_video failed: {}. Hint: input/output must be LOCAL file paths (download cloud URLs to /tmp first).", e),
     }
 }
 
@@ -21936,7 +21946,7 @@ fn execute_export_video_gemini(args: &HashMap<String, Value>) -> String {
     command.arg("-c:v").arg(&codec).arg("-y").arg(output);
     match crate::utils::ffmpeg_utils::execute_ffmpeg_command(command) {
         Ok(s) => s,
-        Err(e) => format!("❌ export_video failed: {}", e),
+        Err(e) => format!("export_video failed: {}. Hint: input/output must be LOCAL file paths (download cloud URLs to /tmp first).", e),
     }
 }
 
