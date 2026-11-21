@@ -3465,7 +3465,7 @@ async fn list_prospects(
         ));
     }
     sql.push_str(
-        " ORDER BY revenue_priority DESC, ai_score DESC NULLS LAST, created_at DESC LIMIT 200",
+        " ORDER BY (sample_delivery_id IS NULL) ASC, revenue_priority DESC, ai_score DESC NULLS LAST, created_at DESC LIMIT 200",
     );
 
     // Bind only the filter values that are present, in the same order.
@@ -4509,14 +4509,10 @@ pub(crate) async fn create_prospect_sample_pack_core(
     let is_new_assignment = existing_assigned.is_none();
     let assigned_app: String = if let Some(a) = existing_assigned {
         a
-    } else if service == "landing_page" || service == "education" {
-        if rand::random::<f64>() < 0.5 {
-            "studio".to_string()
-        } else if service == "landing_page" {
-            "app".to_string()
-        } else {
-            "learn".to_string()
-        }
+    } else if service == "landing_page" {
+        "app".to_string()
+    } else if service == "education" {
+        "learn".to_string()
     } else {
         app_subdomain_for_service(&service).to_string()
     };
@@ -7741,7 +7737,7 @@ async fn instagram_list_leads(
             binds.len() + base + 1
         ));
     }
-    sql.push_str(" ORDER BY followers_count DESC NULLS LAST");
+    sql.push_str(" ORDER BY (sample_delivery_id IS NULL) ASC, followers_count DESC NULLS LAST");
     sql.push_str(&format!(" LIMIT {} OFFSET {}", limit, offset));
 
     // Build and execute dynamically — use raw query for variable bind count
@@ -9065,7 +9061,7 @@ async fn instagram_top_leads(
            AND score >= 60
            AND contact_status = 'new'
            AND is_private = FALSE
-         ORDER BY score DESC, followers_count DESC NULLS LAST
+         ORDER BY (sample_delivery_id IS NULL) ASC, score DESC, followers_count DESC NULLS LAST
          LIMIT 50",
     )
     .bind(user_id)
