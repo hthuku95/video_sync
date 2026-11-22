@@ -1085,17 +1085,27 @@ impl AgenticServicePipeline {
                 // keys. The audio backstop below can't catch them (an audio
                 // file trivially "has audio"). A final video deliverable MUST
                 // have a video stream — refuse and let the workflow retry.
-                let meta = crate::core::analyze_video(&final_path).ok();
-                if let Some(m) = &meta {
-                    if !m.has_video {
+                // ffprobe MUST succeed — a None result means the file is corrupt
+                // (e.g. moov atom not found, truncated upload). Treat as invalid.
+                let meta = match crate::core::analyze_video(&final_path) {
+                    Ok(m) => m,
+                    Err(e) => {
                         let msg = format!(
-                            "ARTIFACT_INVALID: final deliverable has NO video stream ({} — duration {:.1}s, {} bytes). The visual render step did not run. Re-run the hyperframes render then add_audio before export_video.",
-                            final_path, m.duration_seconds,
-                            tokio::fs::metadata(&final_path).await.map(|x| x.len()).unwrap_or(0)
+                            "ARTIFACT_INVALID: ffprobe failed on {} — {} (file may be corrupt/truncated). Re-render and re-upload.",
+                            final_path, e
                         );
                         tracing::error!("publish_output: {}", msg);
                         return Err(msg);
                     }
+                };
+                if !meta.has_video {
+                    let msg = format!(
+                        "ARTIFACT_INVALID: final deliverable has NO video stream ({} — duration {:.1}s, {} bytes). The visual render step did not run. Re-run the hyperframes render then add_audio before export_video.",
+                        final_path, meta.duration_seconds,
+                        tokio::fs::metadata(&final_path).await.map(|x| x.len()).unwrap_or(0)
+                    );
+                    tracing::error!("publish_output: {}", msg);
+                    return Err(msg);
                 }
                 let min_bytes: u64 = std::env::var("ARTIFACT_MIN_BYTES")
                     .ok()
@@ -1125,7 +1135,7 @@ impl AgenticServicePipeline {
                 // generate_text_to_speech + add_audio before exporting.
                 let has_audio = crate::core::analyze_video(&final_path)
                     .map(|m| m.has_audio)
-                    .unwrap_or(true);
+                    .unwrap_or(false); // ffprobe failure = no audio (fail closed)
                 if !has_audio {
                     let dir = std::path::Path::new(&final_path)
                         .parent()
@@ -1313,19 +1323,17 @@ Use the extracted content to understand:
 - Call-to-action and target audience
 
 ## MANDATORY TOOL SEQUENCE (NARRATION-FIRST — DO NOT SKIP OR REORDER)
-1. generate_video_script(topic, duration, style, tone) — plan the content using the website info from step 0. The script MUST be split into {scene_count} scenes (≈20-25s each), one short narration line per scene (1-3 sentences). NARRATION DENSITY: for a scene of T seconds its narration must run ~T×0.6 seconds of speech (≈30-38 words per 15s scene). Target 70-85% speech coverage for the whole video — dense but breathable (leave the 0.35s line gaps, a beat after the hook, and a hold on the final CTA; never wall-to-wall talking). Hard floor: coverage below 60% is a quality failure. Each scene's plan MUST also name the HyperFrames features it will use (menu: VFX shaders, Slug kinetic typography, d3 charts, GSAP timelines, Lottie, audio-reactive motion, masks, CSS perspective/parallax) — the whole video must use at least 3 distinct features and no two consecutive scenes may use an identical feature set.
-2. generate_narration(lines=[...], voice="Emma", output_file="{output_dir}/narration.mp3", gap_seconds=0.35) — synthesize one audio track and get the exact SCENE_TIMELINE_JSON. This is the clock for the entire video. Call it ONCE with all scene lines. If it errors, fix the arguments and retry once; do NOT fall back to per-line generate_text_to_speech and do NOT call auto_generate_video. Then SELF-CHECK density from SCENE_TIMELINE_JSON: (sum of scene speech durations ÷ {duration_seconds}) must be ≥ 0.6 (target 0.70–0.85) — if it is lower, rewrite the scene lines denser and re-run generate_narration BEFORE rendering anything.
-3. Render the MAIN VISUAL as ONE hyperframes_render(html, resolution) composition. Build it directly from the returned timeline:
-   - Root `data-duration` = the returned total audio duration.
-   - Every scene's `data-start` and `data-duration` MUST equal the returned timeline. Scenes tile end-to-end with no gaps or overlaps.
-   - One scene per narration line. Never cut to a new scene while the current line is still being spoken.
-   - The last readable element in each scene must finish entering by 50% of that scene; hold the rest of the scene (no fade-to-black in the middle of a sentence).
-   - Text must fit the frame: 8-10% safe margins on every side, `max-width` on headlines, `clamp()` font sizes, `overflow-wrap:anywhere`. Never use a fixed font size that can crop words on the left/right. Keep headlines to 6-8 words and body copy to at most 2 short lines.
-   - CPU-rendered, no GPU needed. Blender and all 3D tools are UNAVAILABLE on this deployment (no GPU): NEVER call blender_generate_scene_type or blender_execute_bpy_script.
-   - You have FULL access to every HyperFrames feature — use them freely and creatively based on the brief: 50+ cinematic VFX shaders (glitch, film grain, chromatic aberration, bloom, halftone, CRT, etc.), Slug GPU vector typography (word-by-word kinetic reveals), d3 animated charts and data visualizations, a unified 3D scene graph with glTF import and PBR materials, GSAP timelines, Lottie animation playback, audio visualization/reactive motion, transitions, masks, and CSS perspective/parallax for 3D-looking depth. Pick whichever combination best serves the video type the brief asks for (how-to, marketing, product demo, explainer, testimonial, hero, etc.) — do not limit yourself to a fixed template. Implement EVERY feature named in each scene's plan — a scene whose HTML ignores its planned features is a quality failure.
-4. Mux the SAME narration file: add_audio(input_file="<rendered hyperframes video>", audio_file="{output_dir}/narration.mp3", output_file="{output_dir}/output.mp4"). Do NOT call add_voiceover_to_video in this service — it creates a second, unsynchronized track.
-5. POST-PRODUCTION (optional polish): trim/merge only if you keep absolute scene timing intact; add real transcribed captions if needed (transcribe_audio_url — never placeholder text). Branding/logo must be present, no stream chrome or placeholder text in frame. Do not add music that masks the narration.
-6. review_video(video_path_or_url, original_request=<brief>, expected_features=["audible narration","scene changes stay in sync with narration","no cropped or overflowing text","clear call to action","every scene implements the HyperFrames features named in its plan (at least 3 distinct features across the video, not just fades)"]) — fix issues, re-render only the affected scene/timing if possible
+1. generate_video_script(topic, duration, style, tone) — plan {scene_count} scenes (20-25s each), one narration line per scene (1-3 sentences). Target 70-85% speech coverage. Each scene names 2-3 HyperFrames features from: VFX shaders, Slug typography, d3 charts, GSAP, Lottie, audio-reactive motion, masks, CSS parallax. At least 3 distinct features across the video.
+2. generate_narration(lines=[...], voice="Emma", output_file="{output_dir}/narration.mp3", gap_seconds=0.35) — synthesize audio + get SCENE_TIMELINE_JSON. Call ONCE. If it errors, fix args and retry once. Do NOT fall back to per-line TTS. SELF-CHECK: speech coverage ≥ 0.6 (target 0.70-0.85). If lower, rewrite lines denser and re-run.
+3. Render ONE hyperframes_render(html, resolution) from the timeline:
+   - Root data-duration = total audio duration. Scenes tile end-to-end, no gaps/overlaps.
+   - Never cut mid-sentence. Last element enters by 50% of scene. No fade-to-black mid-sentence.
+   - Text: 8-10% margins, max-width headlines, clamp() fonts, overflow-wrap:anywhere. Headlines 6-8 words max.
+   - Use 3+ distinct HyperFrames features (VFX shaders, Slug typography, d3 charts, GSAP, Lottie, audio-reactive, masks, parallax). Pick based on brief.
+   - NEVER call manim or blender — they are disabled. Report error if hyperframes fails.
+4. Mux: add_audio(input_file=<render.mp4>, audio_file="{output_dir}/narration.mp3", output_file="{output_dir}/output.mp4"). Do NOT call add_voiceover_to_video.
+5. POST-PRODUCTION (optional): trim/merge keeping timing; captions via transcribe_audio_url (never placeholders). No music masking narration.
+6. review_video(video_path_or_url, original_request=<brief>) — fix issues, re-render affected scenes only.
 7. submit_final_answer(summary, output_files=[path]) — only after review passes
 
 ## TOOL FALLBACK CHAIN (if a rendering tool fails or is unavailable)

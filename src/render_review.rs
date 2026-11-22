@@ -189,6 +189,16 @@ async fn validate_video_artifact(output_url: &str) -> Option<String> {
                     dur, ARTIFACT_MIN_DURATION_SECS
                 ));
             }
+        } else {
+            // ffprobe ran but failed (e.g. moov atom not found = corrupt file).
+            // Only skip if ffprobe is not installed (NotFound); otherwise reject.
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            if !stderr.contains("No such file") && !stderr.is_empty() {
+                return Some(format!(
+                    "ARTIFACT_INVALID: ffprobe failed on '{}' — {} (file may be corrupt/truncated)",
+                    output_url, stderr.trim()
+                ));
+            }
         }
     }
     None
