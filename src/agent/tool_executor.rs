@@ -9922,24 +9922,17 @@ async fn execute_generate_narration_with_state(args: &Value, ctx: &ToolExecution
     }
 
     format!(
-        "✅ Narration ready: {output_file}\n\
-         Total audio: {actual_total:.3}s across {} scenes (gap {gap:.2}s)\n\n\
-         SCENE_TIMELINE_JSON:\n{}\n\n\
-         HYPERFRAMES_TIMING (copy exactly; root data-duration=\"{actual_total:.3}\"):\n{}\n\
-         RULES: every scene's data-start/data-duration must match this timeline; \
-         scenes must tile end-to-end with no gaps or overlaps; the last readable \
-         element must finish animating by 50% of its scene; do NOT cut to a new \
-         scene mid-sentence; leave the final scene on screen through the end. \
-         Mux this file with add_audio(input_file=<rendered_video>, \
-         audio_file=\"{output_file}\", output_file=<final_video>). \
-         Do NOT call add_voiceover_to_video — that would generate a second, \
-         unsynchronized voice track.\n\n\
-         ⛔ THIS AUDIO FILE IS NOT THE DELIVERABLE. DO NOT STOP HERE AND DO NOT CALL submit_final_answer.\n\
-         NEXT REQUIRED ACTION: build the HyperFrames HTML scenes from SCENE_TIMELINE_JSON and call \
+        "⛔ STOP — THIS AUDIO FILE IS NOT THE DELIVERABLE. DO NOT STOP HERE. DO NOT CALL submit_final_answer.\n\
+         NEXT REQUIRED ACTION (mandatory, do not skip): build the HyperFrames HTML scenes from SCENE_TIMELINE_JSON below and call \
          hyperframes_render (root data-duration=\"{actual_total:.3}\"), then \
          add_audio(input_file=<render.mp4>, audio_file=\"{output_file}\", output_file=<final_video>.mp4), \
          then review_video, then submit_final_answer with the .mp4. \
-         Publishing an audio-only file fails with ARTIFACT_INVALID: NO video stream.",
+         Publishing an audio-only file fails with ARTIFACT_INVALID: NO video stream.\n\n\
+         ✅ Narration ready: {output_file}\n\
+         Total audio: {actual_total:.3}s across {} scenes (gap {gap:.2}s)\n\n\
+         SCENE_TIMELINE_JSON:\n{}\n\n\
+         HYPERFRAMES_TIMING (copy exactly; root data-duration=\"{actual_total:.3}\"):\n{}\n\
+         RULES: scenes tile end-to-end; no gaps/overlaps; last element enters by 50% of scene; no fade-to-black mid-sentence; text fits frame (8-10% margins, clamp fonts).",
         serde_json::to_string_pretty(&scenes).unwrap_or_else(|_| "[]".to_string()),
         timing_snippet,
         actual_total = actual_total,
