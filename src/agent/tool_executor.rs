@@ -2516,7 +2516,9 @@ fn resolve_local_path(path: &str) -> String {
         return path.to_string();
     }
     let fname = path.split('/').last().unwrap_or("downloaded").split('?').next().unwrap_or("downloaded");
-    let local = format!("/tmp/{}", fname);
+    // Use a dedicated directory so cleanup is targeted (not /tmp broadly).
+    let _ = std::fs::create_dir_all("/tmp/vs_dl");
+    let local = format!("/tmp/vs_dl/{}", fname);
     if std::path::Path::new(&local).exists() {
         return local;
     }

@@ -892,6 +892,9 @@ impl AgenticServicePipeline {
 
         // Clean up local files — all media lives in R2 now
         let _ = std::fs::remove_dir_all(&output_dir);
+        // Clean up downloaded cloud URLs (from resolve_local_path) — transient only
+        let _ = std::fs::remove_dir_all("/tmp/vs_dl");
+        let _ = std::fs::create_dir_all("/tmp/vs_dl");
 
         // Terminal completion — ownership-aware when running under the
         // durable queue: if our lease was lost (process replaced, supervisor
