@@ -3457,6 +3457,17 @@ fn execute_submit_final_answer_claude(args: &Value) -> String {
         .map(|arr| arr.iter().filter_map(|v| v.as_str()).collect::<Vec<_>>())
         .unwrap_or_default();
 
+    // Reject audio-only submissions — the agent must produce a video (.mp4).
+    for f in &output_files {
+        let lower = f.to_lowercase();
+        if lower.ends_with(".mp3") || lower.ends_with(".wav") || lower.ends_with(".aac") || lower.ends_with(".ogg") || lower.ends_with(".flac") {
+            return format!(
+                "submit_final_answer REJECTED: '{}' is an audio file, not a video.                  This task requires a video deliverable (.mp4). Do NOT call submit_final_answer                  with audio files. Go back and call hyperframes_render to build the video,                  then add_audio, then review_video, then submit_final_answer with the .mp4.",
+                f
+            );
+        }
+    }
+
     let mut response = format!("✅ {}\n\n", summary);
 
     if !output_files.is_empty() {
@@ -4919,6 +4930,17 @@ fn execute_submit_final_answer_gemini(args: &HashMap<String, Value>) -> String {
         .and_then(|v| v.as_array())
         .map(|arr| arr.iter().filter_map(|v| v.as_str()).collect::<Vec<_>>())
         .unwrap_or_default();
+
+    // Reject audio-only submissions
+    for f in &output_files {
+        let lower = f.to_lowercase();
+        if lower.ends_with(".mp3") || lower.ends_with(".wav") || lower.ends_with(".aac") || lower.ends_with(".ogg") || lower.ends_with(".flac") {
+            return format!(
+                "submit_final_answer REJECTED: '{}' is an audio file, not a video.                  This task requires a video deliverable (.mp4). Call hyperframes_render first.",
+                f
+            );
+        }
+    }
 
     let mut response = format!("✅ {}\n\n", summary);
 

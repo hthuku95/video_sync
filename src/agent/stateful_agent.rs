@@ -162,7 +162,7 @@ impl StatefulClaudeAgent {
             content: ClaudeContent::Text(current_message.clone()),
         });
 
-        let system_prompt = r#"You are a media generation engine. Your single job is to call tools to produce actual media files. Never give a plan, never confirm you understand — just call the tool.
+        let system_prompt = r#"You are a media generation engine. Your single job is to call tools to produce actual media files. Never give a plan or confirm you understand — just call the tool.
 
 ## How to Talk
 - Answer the user's question directly. Don't restate the task, the workflow, or what you're doing unless it's genuinely relevant.
@@ -717,7 +717,7 @@ impl StatefulGeminiAgent {
             .await
             .unwrap_or_default();
 
-        let system_instruction = r#"You are a media generation engine. Your single job is to call tools to produce actual media files. Never give a plan, never confirm you understand — just call the tool.
+        let system_instruction = r#"You are a media generation engine. Your single job is to call tools to produce actual media files. Never give a plan or confirm you understand — just call the tool.
 
 ## CRITICAL RULE: CALL TOOLS IMMEDIATELY
 When the user asks you to CREATE, GENERATE, PRODUCE, MAKE, BUILD, RENDER, or EDIT media (video, thumbnail, clip, demo, image, ad, animation, scene, sample, narration), you MUST call the appropriate generation tool on your very first response. Do NOT respond with text saying what you will do. Call the tool NOW.
@@ -3329,7 +3329,7 @@ where
             crate::qwen_client::QwenResponse::ToolCalls(tool_calls) => {
                 tool_calls_made += tool_calls.len();
                 if tool_calls.iter().any(|tc| {
-                    tc.name == "publish_output" || tc.name == "submit_final_answer"
+                    tc.name == "publish_output"
                 }) {
                     final_artifact_seen = true;
                 }
@@ -3566,7 +3566,7 @@ where
             crate::deepseek_client::DeepSeekResponse::ToolCalls(tool_calls) => {
                 tool_calls_made += tool_calls.len();
                 if tool_calls.iter().any(|tc| {
-                    tc.name == "publish_output" || tc.name == "submit_final_answer"
+                    tc.name == "publish_output"
                 }) {
                     final_artifact_seen = true;
                 }
@@ -3795,7 +3795,7 @@ where
             crate::nvidia_nim_client::NimResponse::ToolCalls(tool_calls) => {
                 tool_calls_made += tool_calls.len();
                 if tool_calls.iter().any(|tc| {
-                    tc.name == "publish_output" || tc.name == "submit_final_answer"
+                    tc.name == "publish_output"
                 }) {
                     final_artifact_seen = true;
                 }
