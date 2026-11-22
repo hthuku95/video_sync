@@ -3099,7 +3099,7 @@ fn openai_messages_to_gemini_contents(
 // (set at workflow creation), so policy follows durable truth — no new flags,
 // no per-provider divergence, no signature changes. Single implementation used
 // by every live loop (qwen/nvidia/deepseek).
-const MAX_TOOL_NUDGES: usize = 5;
+const MAX_TOOL_NUDGES: usize = 10;
 
 /// How many times a provider may answer with an EMPTY message before the loop
 /// gives up. An empty `content` is not a final answer: OpenAI-compatible
@@ -3170,8 +3170,7 @@ fn tool_mandate_nudge(text: &str, tools_empty: bool, final_artifact_seen: bool) 
         return None;
     }
     Some(
-        "SYSTEM MANDATE: your response contained no tool calls but this task requires a          finished video artifact. Do NOT answer in prose. If you have already generated          narration audio, your NEXT tool call MUST be hyperframes_render to build the HTML          video composition, followed by add_audio, review_video, and submit_final_answer.          Reply ONLY with tool calls."
-            .to_string(),
+        "CRITICAL: You generated narration audio but have NOT produced a video. The task is NOT complete. You MUST call hyperframes_render NOW with an HTML composition built from SCENE_TIMELINE_JSON. Do NOT respond with text. Do NOT call submit_final_answer. Do NOT call add_audio before hyperframes_render. Your next response MUST be a tool call to hyperframes_render. If you cannot build HTML, call hyperframes_render with a minimal composition.".to_string(),
     )
 }
 
