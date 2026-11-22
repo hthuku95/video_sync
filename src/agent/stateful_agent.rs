@@ -3099,7 +3099,7 @@ fn openai_messages_to_gemini_contents(
 // (set at workflow creation), so policy follows durable truth — no new flags,
 // no per-provider divergence, no signature changes. Single implementation used
 // by every live loop (qwen/nvidia/deepseek).
-const MAX_TOOL_NUDGES: usize = 3;
+const MAX_TOOL_NUDGES: usize = 5;
 
 /// How many times a provider may answer with an EMPTY message before the loop
 /// gives up. An empty `content` is not a final answer: OpenAI-compatible
@@ -3170,10 +3170,7 @@ fn tool_mandate_nudge(text: &str, tools_empty: bool, final_artifact_seen: bool) 
         return None;
     }
     Some(
-        "SYSTEM MANDATE: your response contained no tool calls and no output artifact, \
-         but this task requires tool-built output (video clips, renders, or files with \
-         shareable URLs). Do NOT answer in prose. Reply ONLY with one or more tool calls \
-         that advance the task toward a finished artifact."
+        "SYSTEM MANDATE: your response contained no tool calls but this task requires a          finished video artifact. Do NOT answer in prose. If you have already generated          narration audio, your NEXT tool call MUST be hyperframes_render to build the HTML          video composition, followed by add_audio, review_video, and submit_final_answer.          Reply ONLY with tool calls."
             .to_string(),
     )
 }
@@ -3299,6 +3296,26 @@ where
                             }));
                             continue;
                         }
+                    }
+                }
+                if !final_artifact_seen {
+                    let required = match artifacts_required {
+                        Some(v) => v,
+                        None => {
+                            let v = workflow_requires_artifacts(
+                                &exec_context.app_state.db_pool,
+                                exec_context.workflow_id,
+                            )
+                            .await;
+                            artifacts_required = Some(v);
+                            v
+                        }
+                    };
+                    if required {
+                        return Err(format!(
+                            "Agent stopped without producing a video artifact after {} nudges",
+                            nudges_used
+                        ));
                     }
                 }
                 tracing::info!("✅ Qwen final answer after {} turns", turn + 1);
@@ -3518,6 +3535,26 @@ where
                         }
                     }
                 }
+                if !final_artifact_seen {
+                    let required = match artifacts_required {
+                        Some(v) => v,
+                        None => {
+                            let v = workflow_requires_artifacts(
+                                &exec_context.app_state.db_pool,
+                                exec_context.workflow_id,
+                            )
+                            .await;
+                            artifacts_required = Some(v);
+                            v
+                        }
+                    };
+                    if required {
+                        return Err(format!(
+                            "Agent stopped without producing a video artifact after {} nudges",
+                            nudges_used
+                        ));
+                    }
+                }
                 tracing::info!("✅ DeepSeek V4 final answer after {} turns", turn + 1);
                 if let Some(wid) = exec_context.workflow_id {
                     if checkpoints_enabled() {
@@ -3725,6 +3762,26 @@ where
                             }));
                             continue;
                         }
+                    }
+                }
+                if !final_artifact_seen {
+                    let required = match artifacts_required {
+                        Some(v) => v,
+                        None => {
+                            let v = workflow_requires_artifacts(
+                                &exec_context.app_state.db_pool,
+                                exec_context.workflow_id,
+                            )
+                            .await;
+                            artifacts_required = Some(v);
+                            v
+                        }
+                    };
+                    if required {
+                        return Err(format!(
+                            "Agent stopped without producing a video artifact after {} nudges",
+                            nudges_used
+                        ));
                     }
                 }
                 tracing::info!("✅ NVIDIA NIM final answer after {} turns", turn + 1);
