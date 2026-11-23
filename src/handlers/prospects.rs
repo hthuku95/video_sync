@@ -4029,7 +4029,8 @@ async fn generate_outreach_message(
     let row = sqlx::query(
         "SELECT display_name, subscriber_count, avg_viewer_count, content_category,
                 prospect_type, dm_script_creator, service_type, x_dm_script, email_script,
-                instagram_handle, twitter_handle, platform, sourced_by, contact_enrichment
+                instagram_handle, twitter_handle, platform, sourced_by, contact_enrichment,
+                channel_description, external_url
          FROM prospects WHERE id=$1",
     )
     .bind(id)
@@ -4061,6 +4062,12 @@ async fn generate_outreach_message(
         .get::<Option<String>, _>("content_category")
         .unwrap_or_else(|| "content".to_string());
     let pt: String = row.get("prospect_type");
+    let channel_desc: String = row
+        .get::<Option<String>, _>("channel_description")
+        .unwrap_or_default();
+    let external_url: String = row
+        .get::<Option<String>, _>("external_url")
+        .unwrap_or_default();
     let platform: String = row.get::<Option<String>, _>("platform").unwrap_or_default();
     let existing_dm: String = row
         .get::<Option<String>, _>("dm_script_creator")
@@ -4279,12 +4286,26 @@ async fn generate_outreach_message(
         .as_deref()
         .filter(|h| !h.is_empty())
         .map(|h| format!("https://instagram.com/{}", h.trim_start_matches('@')));
+    // Prospect-specific context: give the LLM their actual product/site so it
+    // references real features instead of inventing them (prevents hallucination).
+    let prospect_context = if !channel_desc.is_empty() || !external_url.is_empty() {
+        format!(
+            "Prospect's product/site: {}\nProspect's description: {}\nIMPORTANT: Reference ONLY facts from the above. Do NOT invent product features, APIs, or capabilities the prospect does not actually have.",
+            if external_url.is_empty() { "unknown" } else { &external_url },
+            if channel_desc.is_empty() { "not available" } else { &channel_desc }
+        )
+    } else {
+        String::new()
+    };
+
     let prompt = format!(
         r#"Write a personalized X DM and email from VideoSync to {name}, a {category} {pt} with {audience} audience.
 The subject already has a free sample ready at this link: {delivery_url}
 Include the delivery link naturally in both the DM and email — do NOT ask for permission to send it.
 {referral_block}
 {ig_line}
+
+{prospect_context}
 
 Offer: {pitch_focus}
 Price: {price_line}
@@ -4309,6 +4330,7 @@ Legacy DM tone: {existing_dm}"#,
         category = category,
         pt = pt.replace('_', " "),
         audience = audience_label,
+        prospect_context = prospect_context,
         pitch_focus = pitch_focus,
         price_line = price_line,
         lead_offer_block = one_time_offer
