@@ -3,7 +3,7 @@
 ///
 /// ## Model configuration
 /// - `NVIDIA_NIM_MODEL` — text + tool-calling model
-///   (default: nvidia/nemotron-3.5-lightning-30b-a3b)
+///   (default: nvidia/nemotron-3.5-super-vl-120b-a12b)
 /// - `NVIDIA_NIM_VISION_MODEL` — vision + tool-calling model
 ///   (default: nvidia/nemotron-3.5-super-vl-120b-a12b)
 ///
@@ -119,7 +119,7 @@ async fn space_request() {
 const NVIDIA_NIM_ENDPOINT: &str = "https://integrate.api.nvidia.com/v1/chat/completions";
 const NVIDIA_FLUX_IMAGE_ENDPOINT: &str =
     "https://ai.api.nvidia.com/v1/genai/black-forest-labs/flux.1-dev";
-const NVIDIA_DEFAULT_MODEL: &str = "nvidia/nemotron-3.5-lightning-30b-a3b";
+const NVIDIA_DEFAULT_MODEL: &str = "nvidia/nemotron-3.5-super-vl-120b-a12b";
 const NVIDIA_DEFAULT_VISION_MODEL: &str = "meta/muse-glimmer-30b";
 
 /// Generate an image with FLUX.1-dev via NVIDIA's hosted NIM API (free tier).

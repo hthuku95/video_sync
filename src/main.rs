@@ -393,7 +393,7 @@ async fn main() {
     // NVIDIA NIM — text + tool-calling model (free tier; verified working).
     let nvidia_nim_client = std::env::var("NVIDIA_API_KEY").ok().map(|k| {
         let model = std::env::var("NVIDIA_NIM_MODEL")
-            .unwrap_or_else(|_| "nvidia/nemotron-3.5-lightning-30b-a3b".to_string());
+            .unwrap_or_else(|_| "nvidia/nemotron-3.5-super-vl-120b-a12b".to_string());
         tracing::info!("Initializing NVIDIA NIM text client ({})...", model);
         nvidia_nim_client::NvidiaNimClient::with_model(k, model)
     });
