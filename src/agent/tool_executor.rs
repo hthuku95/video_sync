@@ -170,6 +170,18 @@ async fn service_tool_deny(tool_name: &str, ctx: &ToolExecutionContext) -> Optio
     if !hit {
         return None;
     }
+    // Hard deny for delegating tools and manim — no metadata lookup needed.
+    // These are ALWAYS disabled for landing/education sample generation.
+    if tool_name == "run_director" || tool_name == "auto_generate_video"
+        || tool_name == "generate_long_form_video" || tool_name == "manim_execute_script"
+        || tool_name.starts_with("manim_")
+    {
+        tracing::warn!("🚫 tool '{}' denied (delegating/manim disabled)", tool_name);
+        return Some(format!(
+            r#"{{"error":"Tool '{tool_name}' is disabled on this deployment. Do NOT retry. For rendering use hyperframes_render(html=..., resolution=...) with CPU-based HTML/CSS composition. For diagrams/charts use d3 inside hyperframes_render. Never call manim or blender."}}"#
+        ));
+    }
+
     let wid = ctx.workflow_id?;
     let row: Option<(Option<String>, Option<String>)> = sqlx::query_as(
         "SELECT metadata->>'service_slug' AS slug, metadata->>'service_type' AS stype \
