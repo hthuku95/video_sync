@@ -983,10 +983,10 @@ async fn execute_tool_claude_with_context_inner(
 
     // BlenderMCPServer tools (all need AppState for the client)
     if name == "blender_generate_scene_type" {
-        return execute_blender_generate_scene_type_claude(args).await;
+        return "blender_generate_scene_type is PERMANENTLY DISABLED on this deployment (no GPU). Do NOT retry. Use hyperframes_render with CSS perspective/parallax for 3D-looking depth.".to_string();
     }
     if name == "manim_execute_script" {
-        return execute_manim_execute_script_claude(args).await;
+        return "manim_execute_script is PERMANENTLY DISABLED on this deployment (no BlenderMCP backend). Do NOT retry. Convert your scene to an HTML/CSS composition and call hyperframes_render directly.".to_string();
     }
     // HyperFrames CPU rendering (needs ctx for AppState client + R2 upload)
     if name == "hyperframes_render" {
@@ -1219,10 +1219,10 @@ async fn execute_tool_gemini_with_context_inner(
 
     // Blender MCP tools — 3D rendering, Manim, thumbnails, data viz
     if name == "blender_generate_scene_type" {
-        return execute_blender_generate_scene_type_gemini(args).await;
+        return "blender_generate_scene_type is PERMANENTLY DISABLED (no GPU). Do NOT retry. Use hyperframes_render instead.".to_string();
     }
     if name == "manim_execute_script" {
-        return execute_manim_execute_script_gemini(args).await;
+        return "manim_execute_script is PERMANENTLY DISABLED. Do NOT retry. Use hyperframes_render with an HTML/CSS composition instead.".to_string();
     }
     // HyperFrames CPU rendering (needs ctx for AppState client + R2 upload)
     if name == "hyperframes_render" {
@@ -1837,7 +1837,7 @@ pub async fn execute_tool_claude(name: &str, args: &Value) -> String {
         "create_gif_workflow" => execute_create_gif_workflow_claude(args),
         "talking_head_cleanup" => execute_talking_head_cleanup_claude(args),
         "export_video" => execute_export_video_claude(args),
-        "blender_generate_scene_type" => execute_blender_generate_scene_type_claude(args).await,
+        "blender_generate_scene_type" => "blender_generate_scene_type is PERMANENTLY DISABLED (no GPU). Do NOT retry. Use hyperframes_render instead.".to_string(),
         "manim_execute_script" => "manim_execute_script is PERMANENTLY DISABLED on this deployment (no BlenderMCP backend). Do NOT retry. Convert your scene to an HTML/CSS composition and call hyperframes_render directly.".to_string(),
         "download_asset" => execute_download_asset_claude(args).await,
 
@@ -2264,7 +2264,7 @@ pub async fn execute_tool_gemini(name: &str, args: &HashMap<String, Value>) -> S
         "create_gif_workflow" => execute_create_gif_workflow_gemini(args),
         "talking_head_cleanup" => execute_talking_head_cleanup_gemini(args),
         "export_video" => execute_export_video_gemini(args),
-        "blender_generate_scene_type" => execute_blender_generate_scene_type_gemini(args).await,
+        "blender_generate_scene_type" => "blender_generate_scene_type is PERMANENTLY DISABLED (no GPU). Do NOT retry. Use hyperframes_render instead.".to_string(),
         "manim_execute_script" => "manim_execute_script is PERMANENTLY DISABLED. Do NOT retry. Use hyperframes_render with an HTML/CSS composition instead.".to_string(),
         "download_asset" => execute_download_asset_gemini(args).await,
 
@@ -22240,7 +22240,7 @@ async fn execute_hyperframes_render_with_state_claude(
                 Err(e) => format!("❌ HyperFrames render done but R2 upload failed: {e}"),
             }
         }
-        Err(e) => format!("❌ hyperframes_render failed: {}. FALLBACK: Try manim_execute_script for diagrams/charts, or trim_video + merge_videos to splice a partial fix.", e),
+        Err(e) => format!("❌ hyperframes_render failed: {}. FALLBACK: Use trim_video + merge_videos to splice a partial fix. manim is disabled.", e),
     }
 }
 
@@ -22369,7 +22369,7 @@ async fn execute_hyperframes_render_with_state_gemini(
                 Err(e) => format!("❌ HyperFrames render done but R2 upload failed: {e}"),
             }
         }
-        Err(e) => format!("❌ hyperframes_render failed: {}. FALLBACK: Try manim_execute_script for diagrams/charts, or trim_video + merge_videos to splice a partial fix.", e),
+        Err(e) => format!("❌ hyperframes_render failed: {}. FALLBACK: Use trim_video + merge_videos to splice a partial fix. manim is disabled.", e),
     }
 }
 
