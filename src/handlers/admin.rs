@@ -8067,7 +8067,12 @@ function sendFeedback(){
 
     const data = await zernioFetch('/api/deliveries/' + deliveryId + '/social-status');
     if (!data.success) {
-      if (data.error === 'Delivery not found' || data.error === 'Zernio not configured') {
+      // Zernio is disabled / payment-required / not configured: hide the
+      // section silently so prospects never see Zernio errors (owner directive).
+      if (data.error === 'Delivery not found' || data.error === 'Zernio not configured'
+          || (data.error && (data.error.indexOf('PAYMENT_REQUIRED') !== -1
+                             || data.error.indexOf('402') !== -1
+                             || data.error.indexOf('paused') !== -1))) {
         el.innerHTML = '';
       } else {
         el.innerHTML = '<div style="padding:12px;color:#f87171;font-size:13px">' + data.error + '</div>';
