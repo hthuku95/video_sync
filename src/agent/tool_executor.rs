@@ -9744,6 +9744,33 @@ async fn synthesize_narration_line(
 }
 
 async fn execute_generate_narration_with_state(args: &Value, ctx: &ToolExecutionContext) -> String {
+    // TOOL-LEVEL IDEMPOTENCY: if narration already exists for this workflow,
+    // return the cached result instead of regenerating. The LLM cannot skip
+    // saving because the tool saves before returning.
+    let force = args.get("force_regenerate").and_then(|v| v.as_bool()).unwrap_or(false);
+    if !force {
+        if let Some(wid) = ctx.workflow_id {
+            if let Some((content, storage_url, meta)) = crate::services::workflow_artifact::WorkflowArtifact::load(
+                &ctx.app_state.db_pool, wid, "narration",
+            ).await {
+                let url = storage_url.unwrap_or_default();
+                let timeline = content.unwrap_or_default();
+                tracing::info!(workflow_id = %wid, "♻️ Reusing existing narration artifact (skip TTS)");
+                return format!(
+                    "♻️ Reusing existing narration (attempt 1 was successful).\n\
+                     Audio file: {}\n\
+                     Total audio: {}s\n\n\
+                     SCENE_TIMELINE_JSON:\n{}\n\n\
+                     ⛔ THIS AUDIO FILE IS NOT THE DELIVERABLE. DO NOT STOP HERE.\n\
+                     NEXT REQUIRED ACTION: call hyperframes_render, then add_audio, then review_video, then submit_final_answer with the .mp4.",
+                    url,
+                    meta.get("duration_seconds").and_then(|v| v.as_f64()).unwrap_or(0.0),
+                    timeline
+                );
+            }
+        }
+    }
+
     // NIM providers sometimes serialize the array as a string or use
     // {text: ...} objects. Accept all three shapes so one bad-shaped call does
     // not force the agent into a slow per-line TTS fallback.
@@ -9779,6 +9806,32 @@ async fn execute_generate_narration_with_state(args: &Value, ctx: &ToolExecution
     }
     if lines.len() > 12 {
         return "❌ Error: at most 12 narration lines are supported per video".to_string();
+    }
+
+    // ── ARTIFACT IDEMPOTENCY (Nov 23 2026) ──
+    // Tools persist their own outputs. On retry, reuse the cached artifact
+    // instead of regenerating. The LLM never saves anything — the tool does.
+    let force_regen = args.get("force_regenerate").and_then(|v| v.as_bool()).unwrap_or(false);
+    if !force_regen {
+        if let Some(wid) = ctx.workflow_id {
+            if let Some((content, url, meta)) = crate::services::workflow_artifact::WorkflowArtifact::load(&ctx.app_state.db_pool, wid, "narration").await {
+                if let (Some(timeline), Some(audio_url)) = (content.as_deref(), url.as_deref()) {
+                    tracing::info!(workflow_id = %wid, "♻️ Reusing existing narration artifact");
+                    return format!(
+                        "♻️ Reusing existing narration (attempt 1 produced this) — skip TTS, proceed to next step.\n\
+                         Audio URL: {}\n\
+                         Duration: {}s\n\
+                         SCENE_TIMELINE_JSON:\n{}\n\n\
+                         ⛔ THIS AUDIO FILE IS NOT THE DELIVERABLE. DO NOT STOP HERE.\n\
+                         NEXT REQUIRED ACTION: call hyperframes_render with an HTML composition built from SCENE_TIMELINE_JSON, \
+                         then add_audio, then review_video, then submit_final_answer with the .mp4.",
+                        audio_url,
+                        meta.get("duration_seconds").and_then(|v| v.as_f64()).unwrap_or(0.0),
+                        timeline
+                    );
+                }
+            }
+        }
     }
 
     let output_raw = args
@@ -9941,6 +9994,30 @@ async fn execute_generate_narration_with_state(args: &Value, ctx: &ToolExecution
             idx + 1
         ));
         start += duration;
+    }
+
+    // ── SAVE ARTIFACT (tool does the saving, not the LLM) ──
+    // Upload narration to cloud first so the URL is durable (not a local /tmp path).
+    let cloud_url = crate::cloud_storage::upload_local_file_to_cloud(
+        &output_file,
+        "audio/mpeg",
+        ctx.user_id.unwrap_or(0),
+        &ctx.session_id,
+        ctx.workflow_id,
+        &ctx.app_state,
+    ).await.ok();
+    if let Some(wid) = ctx.workflow_id {
+        crate::services::workflow_artifact::WorkflowArtifact::save(
+            &ctx.app_state.db_pool,
+            wid,
+            "narration",
+            "audio_url",
+            Some(&serde_json::to_string_pretty(&scenes).unwrap_or_else(|_| "[]".to_string())),
+            cloud_url.as_deref().or(Some(&output_file)),
+            Some("b2"),
+            &serde_json::json!({ "duration_seconds": actual_total, "scene_count": scenes.len(), "voice": voice }),
+        ).await;
+        tracing::info!(workflow_id = %wid, "💾 Saved narration artifact to DB");
     }
 
     format!(
@@ -22089,6 +22166,28 @@ async fn execute_hyperframes_render_with_state_claude(
     args: &Value,
     ctx: &ToolExecutionContext,
 ) -> String {
+    let force_regen = args.get("force_regenerate").and_then(|v| v.as_bool()).unwrap_or(false);
+
+    // ARTIFACT IDEMPOTENCY: reuse existing render if available
+    if !force_regen {
+        if let Some(wid) = ctx.workflow_id {
+            if let Some((composition, render_url, _meta)) = crate::services::workflow_artifact::WorkflowArtifact::load(&ctx.app_state.db_pool, wid, "render").await {
+                if let Some(url) = render_url {
+                    tracing::info!(workflow_id = %wid, "♻️ Reusing existing HyperFrames render");
+                    return format!(
+                        "♻️ Reusing existing render (cached) — skip re-render.\n\
+                         Video URL: {}\n\
+                         Composition HTML (stored, editable):\n{}\n\n\
+                         NEXT: call add_audio(input_file=<this video URL>, audio_file=<narration.mp3>, output_file=<final.mp4>), \
+                         then review_video, then submit_final_answer with the .mp4.",
+                        url,
+                        composition.unwrap_or_else(|| "<composition not stored>".to_string())
+                    );
+                }
+            }
+        }
+    }
+
     let html = args.get("html").and_then(|v| v.as_str()).unwrap_or("");
     if html.trim().is_empty() {
         return "❌ Error: html (complete standalone composition) is required".to_string();
@@ -22122,7 +22221,22 @@ async fn execute_hyperframes_render_with_state_claude(
             )
             .await
             {
-                Ok(url) => format!("✅ HyperFrames render ready: {url}"),
+                Ok(url) => {
+                    if let Some(wid) = ctx.workflow_id {
+                        crate::services::workflow_artifact::WorkflowArtifact::save(
+                            &ctx.app_state.db_pool, wid, "composition", "html",
+                            Some(html), None, None,
+                            &serde_json::json!({}),
+                        ).await;
+                        crate::services::workflow_artifact::WorkflowArtifact::save(
+                            &ctx.app_state.db_pool, wid, "render", "video_url",
+                            Some(html), Some(&url), Some("b2"),
+                            &serde_json::json!({}),
+                        ).await;
+                        tracing::info!(workflow_id = %wid, "💾 Saved HyperFrames composition + render");
+                    }
+                    format!("✅ HyperFrames render ready: {url}")
+                }
                 Err(e) => format!("❌ HyperFrames render done but R2 upload failed: {e}"),
             }
         }
@@ -22193,6 +22307,16 @@ async fn execute_hyperframes_render_with_state_gemini(
     args: &HashMap<String, Value>,
     ctx: &ToolExecutionContext,
 ) -> String {
+    let force_regen = args.get("force_regenerate").and_then(|v| v.as_bool()).unwrap_or(false);
+    if !force_regen {
+        if let Some(wid) = ctx.workflow_id {
+            if let Some((_comp, render_url, _meta)) = crate::services::workflow_artifact::WorkflowArtifact::load(&ctx.app_state.db_pool, wid, "render").await {
+                if let Some(url) = render_url {
+                    return format!("♻️ Reusing existing render (cached). Video URL: {}\nNEXT: add_audio, review_video, submit_final_answer.", url);
+                }
+            }
+        }
+    }
     let html = args.get("html").and_then(|v| v.as_str()).unwrap_or("");
     if html.trim().is_empty() {
         return "❌ Error: html (complete standalone composition) is required".to_string();
@@ -22226,7 +22350,22 @@ async fn execute_hyperframes_render_with_state_gemini(
             )
             .await
             {
-                Ok(url) => format!("✅ HyperFrames render ready: {url}"),
+                Ok(url) => {
+                    if let Some(wid) = ctx.workflow_id {
+                        crate::services::workflow_artifact::WorkflowArtifact::save(
+                            &ctx.app_state.db_pool, wid, "composition", "html",
+                            Some(html), None, None,
+                            &serde_json::json!({}),
+                        ).await;
+                        crate::services::workflow_artifact::WorkflowArtifact::save(
+                            &ctx.app_state.db_pool, wid, "render", "video_url",
+                            Some(html), Some(&url), Some("b2"),
+                            &serde_json::json!({}),
+                        ).await;
+                        tracing::info!(workflow_id = %wid, "💾 Saved HyperFrames composition + render");
+                    }
+                    format!("✅ HyperFrames render ready: {url}")
+                }
                 Err(e) => format!("❌ HyperFrames render done but R2 upload failed: {e}"),
             }
         }
