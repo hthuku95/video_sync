@@ -1,5 +1,6 @@
 use serde_json::Value;
 use sqlx::PgPool;
+use sqlx::Row;
 use uuid::Uuid;
 
 /// Artifact-level checkpointing for agentic workflows.
