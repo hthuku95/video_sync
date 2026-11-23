@@ -4113,8 +4113,8 @@ async fn generate_outreach_message(
 
     let (existing_x_dm, existing_email) = if !campaigns_on {
         (
-            "Professional, concise, friendly; one-time product bundle offer only.".to_string(),
-            "Professional, concise, friendly; one-time product bundle offer only.".to_string(),
+            "TONE GUIDE (do NOT copy this text — write a NEW DM): professional, concise, friendly; one-time product bundle offer only. No campaign/subscription/recurring wording.".to_string(),
+            "TONE GUIDE (do NOT copy this text — write a NEW email): professional, concise, friendly; one-time product bundle offer only. No campaign/subscription/recurring wording.".to_string(),
         )
     } else {
         (existing_x_dm, existing_email)
@@ -4322,10 +4322,12 @@ DO NOT use emojis excessively. Return only the message text, no preamble.
 Return ONLY valid JSON:
 {{"x_dm":"...","email_script":"Subject: ...\n\n..."}}
 
-Tone references:
+Tone references (use as STYLE GUIDE only — do NOT copy these verbatim):
 X DM tone: {existing_x_dm}
 Email tone: {existing_email}
-Legacy DM tone: {existing_dm}"#,
+Legacy DM tone: {existing_dm}
+
+REMINDER: Generate a NEW, original email. Do NOT echo the tone guide. The email must have a Subject: line and a body referencing the prospect's actual product/site."#,
         name = name,
         category = category,
         pt = pt.replace('_', " "),
