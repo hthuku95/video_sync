@@ -4874,6 +4874,10 @@ async fn execute_submit_final_answer_with_state_gemini(
         }
     }
 
+    if let Some(rejection) = reject_audio_only_final(ctx, &output_files).await {
+        return rejection;
+    }
+
     let mut response = format!("✅ {}\n\n", summary);
 
     if !output_files.is_empty() {
@@ -4948,6 +4952,44 @@ async fn execute_submit_final_answer_with_state_gemini(
     response
 }
 
+/// Reject audio-only deliverables in the STATEFUL submit_final_answer paths
+/// actually used by durable agent loops. The non-state handlers already did
+/// this; without it an agent can finish on narration.mp3, which publish_output
+/// then rejects as "NO video stream" after all 5 pipeline attempts.
+async fn reject_audio_only_final<S: AsRef<str>>(
+    ctx: &ToolExecutionContext,
+    files: &[S],
+) -> Option<String> {
+    let has_audio = files.iter().any(|f| {
+        let ext = std::path::Path::new(f.as_ref())
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        matches!(ext.as_str(), "mp3" | "wav" | "aac" | "m4a")
+    });
+    if !has_audio {
+        return None;
+    }
+    if let Some(wid) = ctx.workflow_id {
+        let wtype: Option<String> = sqlx::query_scalar("SELECT workflow_type FROM app_workflows WHERE id = $1")
+            .bind(wid)
+            .fetch_optional(&ctx.app_state.db_pool)
+            .await
+            .ok()
+            .flatten();
+        // Voice-audio services legitimately deliver audio only.
+        if matches!(wtype.as_deref(), Some("agentic_voice_audio")) {
+            return None;
+        }
+    }
+    Some(
+        "submit_final_answer REJECTED: audio-only output is not a video deliverable. \
+         Call hyperframes_render to build the video, then add_audio, then submit_final_answer with the .mp4."
+            .to_string(),
+    )
+}
+
 async fn execute_submit_final_answer_with_state_claude(
     args: &Value,
     ctx: &ToolExecutionContext,
@@ -4957,6 +4999,10 @@ async fn execute_submit_final_answer_with_state_claude(
         .as_array()
         .map(|arr| arr.iter().filter_map(|v| v.as_str()).collect::<Vec<_>>())
         .unwrap_or_default();
+
+    if let Some(rejection) = reject_audio_only_final(ctx, &output_files).await {
+        return rejection;
+    }
 
     let mut response = format!("✅ {}\n\n", summary);
 
