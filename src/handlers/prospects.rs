@@ -4692,14 +4692,13 @@ pub(crate) async fn create_prospect_sample_pack_core(
     }
 
     // For landing_page: deep-crawl the website via BrowserBase so the LLM agent gets CSS tokens, all pages, and full content
-    // Pre-crawl is OFF by default. The landing/education agent already crawls
-    // the site (STEP 0) inside the workflow, in parallel with other samples.
-    // Doing it here too blocked the single outreach worker for 1-8 minutes per
-    // prospect before the workflow was even enqueued. Set SAMPLE_PRECRAWL=1 to
-    // restore the old double-crawl behavior.
+    // Full pre-crawl kept for quality: the agent gets the site's design tokens
+    // and content in its initial context, in addition to its own Step 0 crawl.
+    // Set SAMPLE_PRECRAWL=0 only if a fast, lower-quality batch is explicitly
+    // wanted.
     let precrawl_enabled = std::env::var("SAMPLE_PRECRAWL")
-        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-        .unwrap_or(false);
+        .map(|v| !(v == "0" || v.eq_ignore_ascii_case("false")))
+        .unwrap_or(true);
     let mut scraped_site = None;
     if precrawl_enabled && matches!(service.as_str(), "landing_page") && has_product_url {
         match crate::browserbase_client::crawl_website(&source_url).await {

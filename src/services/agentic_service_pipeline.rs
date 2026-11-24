@@ -465,44 +465,30 @@ impl AgenticServicePipeline {
         // stops improvising detours mid-render and operators get an inspectable
         // plan artifact (app_workflow_events / trace endpoint). Bounded cost:
         // exactly one extra fast-chain call per RUN (not per attempt).
-        // Sample runs already carry a complete, service-specific tool sequence
-        // in the prompt, so a planner LLM call just adds 1-2 minutes (and NIM
-        // quota) per sample. The canned plan is deterministic and does not
-        // inject disabled tools. Keep the LLM planner for paying workflows.
-        let is_sample_run = input.prospect_id.is_some()
-            || input
-                .idempotency_key
-                .as_deref()
-                .map(|k| k.starts_with("prospect-sample") || k.starts_with("instagram-lead"))
-                .unwrap_or(false);
+        // Plan-then-execute for every workflow, including samples: the planner
+        // reviews the brief and commits the agent to a service-specific tool
+        // sequence, which is part of the sample quality. Keep the deterministic
+        // gate + one retry + canned fallback for junk plans.
+        let execution_plan = generate_execution_plan(&state, service_type, &input).await;
         let mut plan_source = "llm";
-        let execution_plan: Result<String, String> = if is_sample_run {
-            plan_source = "canned_sample";
-            Ok(canned_plan(service_type, input.delivery_id))
-        } else {
-            let generated = generate_execution_plan(&state, service_type, &input).await;
-            // Deterministic gate + one retry + guaranteed-sane canned fallback
-            // (owner directive Nov 12 2026): a junk plan used to ship into the
-            // agent with only a log warning.
-            match generated {
-                Ok(plan) if plan_is_valid(&plan, service_type) => Ok(plan),
-                Ok(invalid) => {
-                    tracing::warn!(workflow_id = %workflow_id, "planner output invalid — retrying once");
-                    let _ = invalid;
-                    let retry = generate_execution_plan(&state, service_type, &input).await;
-                    match retry {
-                        Ok(plan) if plan_is_valid(&plan, service_type) => Ok(plan),
-                        _ => {
-                            plan_source = "canned_fallback";
-                            Ok(canned_plan(service_type, input.delivery_id))
-                        }
+        let execution_plan: Result<String, String> = match execution_plan {
+            Ok(plan) if plan_is_valid(&plan, service_type) => Ok(plan),
+            Ok(invalid) => {
+                tracing::warn!(workflow_id = %workflow_id, "planner output invalid — retrying once");
+                let _ = invalid;
+                let retry = generate_execution_plan(&state, service_type, &input).await;
+                match retry {
+                    Ok(plan) if plan_is_valid(&plan, service_type) => Ok(plan),
+                    _ => {
+                        plan_source = "canned_fallback";
+                        Ok(canned_plan(service_type, input.delivery_id))
                     }
                 }
-                Err(e) => {
-                    tracing::warn!(workflow_id = %workflow_id, "execution plan generation failed — using canned plan: {e}");
-                    plan_source = "canned_fallback";
-                    Ok(canned_plan(service_type, input.delivery_id))
-                }
+            }
+            Err(e) => {
+                tracing::warn!(workflow_id = %workflow_id, "execution plan generation failed — using canned plan: {e}");
+                plan_source = "canned_fallback";
+                Ok(canned_plan(service_type, input.delivery_id))
             }
         };
         let mut agent_prompt = Self::build_agent_prompt(service_type, &input, &output_dir);
@@ -1463,12 +1449,11 @@ Before writing anything, research the topic using the web-crawling infrastructur
 ## MANDATORY TOOL SEQUENCE (NARRATION-FIRST — DO NOT SKIP OR REORDER)
 1. generate_video_script(topic="{brief}", duration={duration_seconds}, style="{style}", tone="professional"). Split the lesson into {scene_count} scenes (≈20-25s each), one short narration line per scene. NARRATION DENSITY: for a scene of T seconds its narration must run ~T×0.6 seconds of speech (≈30-38 words per 15s scene). Target 70-85% speech coverage for the whole video — dense but breathable (leave the 0.35s line gaps, a beat after the hook, and a hold on the final CTA; never wall-to-wall talking). Hard floor: coverage below 60% is a quality failure. Each scene's plan MUST also name the HyperFrames features it will use (menu: VFX shaders, Slug kinetic typography, d3 charts, GSAP timelines, Lottie, audio-reactive motion, masks, CSS perspective/parallax) — the whole lesson must use at least 3 distinct features and no two consecutive scenes may use an identical feature set. Ground every factual claim in the Step 0 research.
 2. generate_narration(lines=[...], voice="Emma", output_file="{out}/narration.mp3", gap_seconds=0.35) — synthesize the voice track and get the exact SCENE_TIMELINE_JSON. This is the clock for the whole lesson. Call it ONCE with all scene lines. If it errors, fix the arguments and retry once; do NOT fall back to per-line generate_text_to_speech and do NOT call auto_generate_video. Then SELF-CHECK density from SCENE_TIMELINE_JSON: (sum of scene speech durations ÷ {duration_seconds}) must be ≥ 0.6 (target 0.70–0.85) — if it is lower, rewrite the scene lines denser and re-run generate_narration BEFORE rendering anything.
-3. Render ONE hyperframes_render(html=..., resolution=...) containing ALL scenes on a single timeline:
-   - Build a single standalone HTML composition. Root data-duration = total narration duration. Each scene is a <section data-start="..." data-duration="..."> positioned exactly on SCENE_TIMELINE_JSON; scenes tile end-to-end with no gaps/overlaps.
-   - hyperframes_render has FULL access to every HyperFrames feature — use them freely: 50+ cinematic VFX shaders (glitch, film grain, chromatic aberration, bloom, halftone, CRT, etc.), Slug GPU vector typography (word-by-word kinetic reveals), d3 animated charts and data visualizations, a unified 3D scene graph with glTF import and PBR materials, GSAP timelines, Lottie animation playback, audio visualization/reactive motion, transitions, masks, and CSS perspective/parallax. Implement EVERY feature named in each scene's plan — a scene whose HTML ignores its planned features is a quality failure.
+3. Render each scene to EXACTLY its timeline duration:
+   - hyperframes_render(html=..., resolution=...) — for titles, kinetic typography, layouts, animated backgrounds, intro/outro sequences, and ALL 2D/3D motion graphics. You have FULL access to every HyperFrames feature — use them freely and creatively: 50+ cinematic VFX shaders (glitch, film grain, chromatic aberration, bloom, halftone, CRT, etc.), Slug GPU vector typography (word-by-word kinetic reveals), d3 animated charts and data visualizations, a unified 3D scene graph with glTF import and PBR materials, GSAP timelines, Lottie animation playback, audio visualization/reactive motion, transitions, masks, and CSS perspective/parallax. Pick whichever combination best serves the lesson content. Its root data-duration and scene data-start/data-duration MUST equal the timeline. CPU-rendered, no GPU needed. Implement EVERY feature named in each scene's plan — a scene whose HTML ignores its planned features is a quality failure.
    - Blender/Manim are UNAVAILABLE: NEVER call manim_execute_script, blender_generate_scene_type, or blender_execute_bpy_script. Render equations, diagrams, code animations, data charts, and LaTeX-style formulas with hyperframes_render (HTML/CSS + d3). Simulate 3D-looking depth with CSS perspective/parallax.
-   - Do NOT render one clip per scene. Do NOT call merge_videos. ONE render produces the whole lesson.
-4. add_audio(input_file=<that render.mp4>, audio_file="{out}/narration.mp3", output_file="{out}/output.mp4"). Do NOT call add_voiceover_to_video in this service — it creates a second, unsynchronized track.
+   - Keep EVERY scene inside its own duration; when merging, preserve the narration timeline exactly.
+4. merge_videos the scene clips in narration order, then add_audio(input_file="{out}/merged.mp4", audio_file="{out}/narration.mp3", output_file="{out}/output.mp4"). Do NOT call add_voiceover_to_video in this service — it creates a second, unsynchronized track.
 5. POST-PRODUCTION (optional polish): add real transcribed captions via transcribe_audio_url (never placeholder text), brand/logo, color and subtle music. Never change scene boundaries or mask narration. Text must fit with safe margins; no cropped words, no overlapping titles/formulas.
 6. review_video(video_path_or_url="{out}/output.mp4", original_request="{brief}", expected_features=["audible narration","scene changes stay in sync with narration","no cropped, truncated, or overlapping text","all formulas fully visible","no blank or partial frames","every scene implements the HyperFrames features named in its plan (at least 3 distinct features across the lesson, not just fades)"])
 7. submit_final_answer(summary="education video {title}", output_files=["{out}/output.mp4"])
@@ -2163,7 +2148,7 @@ async fn generate_execution_plan(
     let tool_hints = match service_type {
         ServiceType::Clipping => "generate_clip_compilation (downloads + extracts + captions clips), kick_post_processing happens automatically; final artifacts are clip URLs",
         ServiceType::LandingPage => "browserbase_crawl_website (read the source site first), generate_video_script, generate_narration (audio-first timing), hyperframes_render, add_audio, review_video, submit_final_answer",
-        ServiceType::Education => "browserbase_crawl_website (research the topic from authoritative sources FIRST), vectorize_crawled_content, search_crawled_content, generate_video_script, generate_narration (audio-first timing), hyperframes_render (ONE composition containing all scenes), add_audio, review_video, submit_final_answer",
+        ServiceType::Education => "browserbase_crawl_website (research the topic from authoritative sources FIRST), vectorize_crawled_content, search_crawled_content, generate_video_script, generate_narration (audio-first timing), hyperframes_render (one per scene, full feature access), merge_videos, add_audio, review_video, submit_final_answer",
         // Tailored TOOL chains for the other narrative services (owner
         // directive Nov 13 2026): every plan must reflect how ITS video type
         // is built. Feature narrowing is NOT allowed — every hyperframes_render
@@ -2311,7 +2296,7 @@ fn canned_plan(service_type: ServiceType, delivery_id: Uuid) -> String {
             "browserbase_crawl_website(source url) -> crawled facts",
             "generate_video_script(facts, brief) -> scene plan",
             "generate_narration(scene lines) -> narration.mp3 + timeline",
-            "hyperframes_render(ONE composition with all scenes) -> visuals.mp4",
+            "hyperframes_render(scene compositions) -> visuals.mp4",
             "add_audio(visuals, narration) -> output.mp4",
             "review_video(output.mp4) -> QA pass",
             "submit_final_answer(output.mp4) -> delivered video",
@@ -2321,8 +2306,9 @@ fn canned_plan(service_type: ServiceType, delivery_id: Uuid) -> String {
             "vectorize_crawled_content + search_crawled_content -> grounded fact set",
             "generate_video_script(grounded facts, brief) -> scene plan",
             "generate_narration(scene lines) -> narration.mp3 + timeline",
-            "hyperframes_render(ONE composition with all scenes) -> visuals.mp4",
-            "add_audio(visuals, narration) -> output.mp4",
+            "hyperframes_render(scene compositions) -> visuals.mp4",
+            "merge_videos(scene clips) -> merged.mp4",
+            "add_audio(merged, narration) -> output.mp4",
             "review_video(output.mp4) -> QA pass",
             "submit_final_answer(output.mp4) -> delivered video",
         ],
