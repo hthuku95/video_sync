@@ -202,15 +202,22 @@ async fn process_one_item(state: &Arc<AppState>) -> Result<bool, String> {
     let Some(delivery_id) = delivery_id else {
         return Ok(false);
     };
-    let drow: Option<(String, Option<String>)> =
-        sqlx::query_as("SELECT status, output_r2_url FROM deliveries WHERE id = $1")
-            .bind(delivery_id)
-            .fetch_optional(&state.db_pool)
-            .await
-            .map_err(|e| format!("delivery load failed: {e}"))?;
+    // Also read the linked workflow state. A deploy/cancel/orphan-reap can
+    // leave a delivery 'pending' forever; without this the outreach item sits
+    // in sample_generating and is re-checked every 10 minutes indefinitely.
+    let drow: Option<(String, Option<String>, Option<String>)> = sqlx::query_as(
+        "SELECT d.status, d.output_r2_url, w.status
+           FROM deliveries d
+           LEFT JOIN app_workflows w ON w.id = d.workflow_id
+          WHERE d.id = $1",
+    )
+    .bind(delivery_id)
+    .fetch_optional(&state.db_pool)
+    .await
+    .map_err(|e| format!("delivery load failed: {e}"))?;
 
     match drow {
-        Some((dstatus, Some(url))) if dstatus.eq_ignore_ascii_case("completed") => {
+        Some((dstatus, Some(url), _)) if dstatus.eq_ignore_ascii_case("completed") => {
             let final_status = if batch_mode == "samples_only" {
                 "sample_ready" // STOP — no email in samples-only mode
             } else {
@@ -229,7 +236,17 @@ async fn process_one_item(state: &Arc<AppState>) -> Result<bool, String> {
             maybe_complete_batch(state, batch_id).await;
             Ok(true)
         }
-        Some((dstatus, _)) if dstatus.eq_ignore_ascii_case("failed") => {
+        // A delivery is only genuinely failed if the delivery failed OR its
+        // workflow is terminal while the delivery is still pending. Otherwise
+        // a cancelled/failed workflow leaves the item stuck forever.
+        Some((dstatus, _, wstatus))
+            if dstatus.eq_ignore_ascii_case("failed")
+                || (matches!(dstatus.as_str(), "pending" | "queued" | "running")
+                    && matches!(
+                        wstatus.as_deref(),
+                        Some("failed") | Some("cancelled")
+                    )) =>
+        {
             let new_attempts = attempts + 1;
             if new_attempts >= MAX_ATTEMPTS {
                 mark_item(
@@ -254,7 +271,35 @@ async fn process_one_item(state: &Arc<AppState>) -> Result<bool, String> {
                 Ok(true)
             }
         }
-        _ => Ok(true), // still rendering — check again next tick
+        Some((dstatus, _, _))
+            if matches!(dstatus.as_str(), "pending" | "queued" | "running") =>
+        {
+            // Genuinely in flight. Clear a stale error from a previous cycle
+            // so the UI does not show "failed" while a fresh render runs.
+            let _ = sqlx::query(
+                "UPDATE prospect_outreach_items
+                    SET error_message = NULL, updated_at = NOW()
+                  WHERE id = $1 AND error_message IS NOT NULL",
+            )
+            .bind(item_id)
+            .execute(&state.db_pool)
+            .await;
+            Ok(true)
+        }
+        None => {
+            // Delivery row vanished (deleted) — requeue cleanly.
+            sqlx::query(
+                "UPDATE prospect_outreach_items
+                    SET status='pending_sample', delivery_id=NULL, updated_at=NOW()
+                  WHERE id=$1",
+            )
+            .bind(item_id)
+            .execute(&state.db_pool)
+            .await
+            .map_err(|e| format!("item update failed: {e}"))?;
+            Ok(true)
+        }
+        _ => Ok(true), // unknown state — check again next tick
     }
 }
 

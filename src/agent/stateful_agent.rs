@@ -2546,6 +2546,28 @@ async fn execute_tool_call_in_loop(
     tools: &mut Vec<crate::gemini_client::FunctionDeclaration>,
     ledger: &mut RunLedger,
 ) -> String {
+    // Liveness guard. The heartbeat ticker stops renewing when the lease is
+    // lost, but the pipeline task itself kept running, so a zombie worker
+    // could keep rendering and overwriting artifacts after the supervisor
+    // requeued the workflow. Refuse all tool calls once ownership is gone.
+    if let Some(wid) = exec_context.workflow_id {
+        let still_owned = sqlx::query_scalar::<_, bool>(
+            "SELECT status = 'running'
+                    AND (lease_expires_at IS NULL OR lease_expires_at > NOW())
+               FROM app_workflows WHERE id = $1",
+        )
+        .bind(wid)
+        .fetch_one(&exec_context.app_state.db_pool)
+        .await
+        .unwrap_or(true); // a DB hiccup must not kill a live run
+        if !still_owned {
+            tracing::warn!(workflow_id = %wid, tool = tool_name, "🛑 lease lost — refusing tool execution");
+            return format!(
+                "WORKFLOW_LEASE_LOST: workflow {wid} is no longer owned by this worker; aborting {tool_name}."
+            );
+        }
+    }
+
     if tool_name == "search_tools" {
         let (text, matched_names) = crate::ai_tool_selector::execute_search_tools(args_map);
         if !matched_names.is_empty() {
@@ -3158,19 +3180,23 @@ async fn workflow_requires_artifacts(pool: &sqlx::PgPool, workflow_id: Option<uu
 /// Returns `Some(nudge)` when the loop must mandate tool calls and continue,
 /// `None` when the prose is acceptable as the final answer (chat semantics,
 /// salvaged artifact URLs present, nothing callable, or nudges exhausted).
-fn tool_mandate_nudge(text: &str, tools_empty: bool, final_artifact_seen: bool) -> Option<String> {
-    if tools_empty {
-        return None;
-    }
-    // Once the terminal artifact (publish_output / submit_final_answer) has been
-    // produced, a prose reply that cites its URL is a legitimate final answer.
-    // Before that point, a URL in the prose (e.g. the narration.mp3 the model
-    // just generated) is NOT a finished deliverable — keep nudging.
-    if final_artifact_seen && text_contains_artifact_url(text) {
+fn tool_mandate_nudge(_text: &str, tools_empty: bool, final_artifact_seen: bool) -> Option<String> {
+    if tools_empty || final_artifact_seen {
+        // A successful submit_final_answer is the terminal artifact. Do not
+        // keep nudging after it — the old code only accepted publish_output,
+        // which is not a real tool, so every artifact run looped until it
+        // exhausted its nudge budget and returned an error.
         return None;
     }
     Some(
-        "CRITICAL: You generated narration audio but have NOT produced a video. The task is NOT complete. You MUST call hyperframes_render NOW with an HTML composition built from SCENE_TIMELINE_JSON. Do NOT respond with text. Do NOT call submit_final_answer. Do NOT call add_audio before hyperframes_render. Your next response MUST be a tool call to hyperframes_render. If you cannot build HTML, call hyperframes_render with a minimal composition.".to_string(),
+        "CRITICAL: this task is NOT complete — you have not successfully called \
+         submit_final_answer with a video deliverable. Inspect the artifacts you already \
+         produced. If narration audio exists but the render has no audio, call \
+         add_audio(input_file=<render.mp4>, audio_file=<narration.mp3>, \
+         output_file=<output.mp4>). Do NOT call hyperframes_render again for a composition \
+         you already rendered. If output.mp4 already exists, call submit_final_answer with \
+         its path. Your next response MUST be a tool call, not prose."
+            .to_string(),
     )
 }
 
@@ -3328,11 +3354,6 @@ where
 
             crate::qwen_client::QwenResponse::ToolCalls(tool_calls) => {
                 tool_calls_made += tool_calls.len();
-                if tool_calls.iter().any(|tc| {
-                    tc.name == "publish_output"
-                }) {
-                    final_artifact_seen = true;
-                }
                 let assistant_tool_calls: Vec<serde_json::Value> = tool_calls
                     .iter()
                     .map(|tc| {
@@ -3385,6 +3406,17 @@ where
                             .await
                     };
 
+                    // A tool named "publish_output" does NOT exist — the real
+                    // terminal tool is submit_final_answer. Set the flag only
+                    // when it actually succeeded (audio-only submissions are
+                    // rejected by the tool, so a ❌/REJECTED result must not
+                    // count as a finished deliverable).
+                    if tc.name == "submit_final_answer"
+                        && !result.contains("REJECTED")
+                        && !result.trim_start().starts_with('❌')
+                    {
+                        final_artifact_seen = true;
+                    }
                     send_progress(&format!("✅ {} done", tc.name));
 
                     // OpenAI-compatible: associate tool result via tool_call_id.
@@ -3565,11 +3597,6 @@ where
 
             crate::deepseek_client::DeepSeekResponse::ToolCalls(tool_calls) => {
                 tool_calls_made += tool_calls.len();
-                if tool_calls.iter().any(|tc| {
-                    tc.name == "publish_output"
-                }) {
-                    final_artifact_seen = true;
-                }
                 let assistant_tool_calls: Vec<serde_json::Value> = tool_calls
                     .iter()
                     .map(|tc| {
@@ -3622,6 +3649,17 @@ where
                             .await
                     };
 
+                    // A tool named "publish_output" does NOT exist — the real
+                    // terminal tool is submit_final_answer. Set the flag only
+                    // when it actually succeeded (audio-only submissions are
+                    // rejected by the tool, so a ❌/REJECTED result must not
+                    // count as a finished deliverable).
+                    if tc.name == "submit_final_answer"
+                        && !result.contains("REJECTED")
+                        && !result.trim_start().starts_with('❌')
+                    {
+                        final_artifact_seen = true;
+                    }
                     send_progress(&format!("✅ {} done", tc.name));
 
                     messages.push(serde_json::json!({
@@ -3794,11 +3832,6 @@ where
 
             crate::nvidia_nim_client::NimResponse::ToolCalls(tool_calls) => {
                 tool_calls_made += tool_calls.len();
-                if tool_calls.iter().any(|tc| {
-                    tc.name == "publish_output"
-                }) {
-                    final_artifact_seen = true;
-                }
                 let assistant_tool_calls: Vec<serde_json::Value> = tool_calls
                     .iter()
                     .map(|tc| {
@@ -3851,6 +3884,17 @@ where
                             .await
                     };
 
+                    // A tool named "publish_output" does NOT exist — the real
+                    // terminal tool is submit_final_answer. Set the flag only
+                    // when it actually succeeded (audio-only submissions are
+                    // rejected by the tool, so a ❌/REJECTED result must not
+                    // count as a finished deliverable).
+                    if tc.name == "submit_final_answer"
+                        && !result.contains("REJECTED")
+                        && !result.trim_start().starts_with('❌')
+                    {
+                        final_artifact_seen = true;
+                    }
                     send_progress(&format!("✅ {} done", tc.name));
 
                     messages.push(serde_json::json!({

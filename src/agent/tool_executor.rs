@@ -13,6 +13,54 @@ use std::time::Duration;
 use tokio::fs::File;
 use tokio::io::AsyncWriteExt;
 
+/// Short, stable content hash used for content-addressed artifact cache keys.
+/// A workflow may render many different HTML compositions (one per scene);
+/// caching by stage alone would return scene 1 for every subsequent scene.
+fn short_hash(input: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let digest = Sha256::digest(input.as_bytes());
+    digest
+        .iter()
+        .take(12)
+        .map(|b| format!("{:02x}", b))
+        .collect()
+}
+
+/// Cached artifacts hold presigned B2/R2 URLs (7-day expiry here). Reusing an
+/// expired URL is worse than a cache miss: ffmpeg receives a 403 XML body and
+/// fails with "moov atom not found". Treat expired URLs as a cache miss.
+fn presigned_url_alive(url: &str) -> bool {
+    let Some(query) = url.split('?').nth(1) else {
+        return true; // durable/public URL
+    };
+    let mut issued: Option<u64> = None;
+    let mut lifetime: Option<u64> = None;
+    for pair in query.split('&') {
+        let mut kv = pair.splitn(2, '=');
+        let key = kv.next().unwrap_or("");
+        let value = kv.next().unwrap_or("");
+        if key.eq_ignore_ascii_case("X-Amz-Date") {
+            // SigV4 format: 20261123T120000Z — NOT an epoch integer.
+            issued = chrono::NaiveDateTime::parse_from_str(value, "%Y%m%dT%H%M%SZ")
+                .ok()
+                .map(|dt| dt.and_utc().timestamp() as u64);
+        } else if key.eq_ignore_ascii_case("X-Amz-Expires") {
+            lifetime = value.parse::<u64>().ok();
+        }
+    }
+    match (issued, lifetime) {
+        (Some(date), Some(expires)) => {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            now < date.saturating_add(expires).saturating_sub(60)
+        }
+        // Unknown signing scheme — do not falsely invalidate.
+        _ => true,
+    }
+}
+
 /// Retry function with exponential backoff for handling vectorization delays
 async fn retry_with_exponential_backoff<F, Fut, T, E>(
     mut operation: F,
@@ -2527,19 +2575,69 @@ fn resolve_local_path(path: &str) -> String {
     if path.is_empty() || !path.starts_with("http") {
         return path.to_string();
     }
-    let fname = path.split('/').last().unwrap_or("downloaded").split('?').next().unwrap_or("downloaded");
+    let raw_name = path
+        .split('/')
+        .last()
+        .unwrap_or("downloaded")
+        .split('?')
+        .next()
+        .unwrap_or("downloaded");
+    let safe_name: String = raw_name
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_') {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
     // Use a dedicated directory so cleanup is targeted (not /tmp broadly).
     let _ = std::fs::create_dir_all("/tmp/vs_dl");
-    let local = format!("/tmp/vs_dl/{}", fname);
+    // Hash the FULL url into the filename: two different files both named
+    // narration.mp3 (different workflows) must not overwrite each other.
+    let local = format!(
+        "/tmp/vs_dl/{}_{}",
+        short_hash(path),
+        if safe_name.is_empty() { "downloaded" } else { &safe_name }
+    );
     if std::path::Path::new(&local).exists() {
-        return local;
+        // A previous failed curl may have left a zero/partial file.
+        if std::fs::metadata(&local).map(|m| m.len() > 0).unwrap_or(false) {
+            return local;
+        }
+        let _ = std::fs::remove_file(&local);
     }
-    let status = std::process::Command::new("curl")
-        .args(["-sL", "-o", &local, path])
+    let status = StdCommand::new("curl")
+        .args([
+            "-sSL",
+            "--fail",
+            "--max-time",
+            "300",
+            "--connect-timeout",
+            "15",
+            "--retry",
+            "2",
+            "--retry-delay",
+            "2",
+            "-o",
+            &local,
+            path,
+        ])
         .status();
     match status {
-        Ok(s) if s.success() => local,
-        _ => path.to_string(),
+        Ok(s)
+            if s.success()
+                && std::fs::metadata(&local)
+                    .map(|m| m.len() > 0)
+                    .unwrap_or(false) =>
+        {
+            local
+        }
+        _ => {
+            let _ = std::fs::remove_file(&local);
+            path.to_string()
+        }
     }
 }
 
@@ -9756,32 +9854,11 @@ async fn synthesize_narration_line(
 }
 
 async fn execute_generate_narration_with_state(args: &Value, ctx: &ToolExecutionContext) -> String {
-    // TOOL-LEVEL IDEMPOTENCY: if narration already exists for this workflow,
-    // return the cached result instead of regenerating. The LLM cannot skip
-    // saving because the tool saves before returning.
-    let force = args.get("force_regenerate").and_then(|v| v.as_bool()).unwrap_or(false);
-    if !force {
-        if let Some(wid) = ctx.workflow_id {
-            if let Some((content, storage_url, meta)) = crate::services::workflow_artifact::WorkflowArtifact::load(
-                &ctx.app_state.db_pool, wid, "narration",
-            ).await {
-                let url = storage_url.unwrap_or_default();
-                let timeline = content.unwrap_or_default();
-                tracing::info!(workflow_id = %wid, "♻️ Reusing existing narration artifact (skip TTS)");
-                return format!(
-                    "♻️ Reusing existing narration (attempt 1 was successful).\n\
-                     Audio file: {}\n\
-                     Total audio: {}s\n\n\
-                     SCENE_TIMELINE_JSON:\n{}\n\n\
-                     ⛔ THIS AUDIO FILE IS NOT THE DELIVERABLE. DO NOT STOP HERE.\n\
-                     NEXT REQUIRED ACTION: call hyperframes_render, then add_audio, then review_video, then submit_final_answer with the .mp4.",
-                    url,
-                    meta.get("duration_seconds").and_then(|v| v.as_f64()).unwrap_or(0.0),
-                    timeline
-                );
-            }
-        }
-    }
+    // NOTE: an earlier duplicate of this cache block ran BEFORE argument
+    // parsing and used `storage_url.unwrap_or_default()`. If an artifact row
+    // existed with a NULL url it returned "Audio file: " (empty), poisoning
+    // the retry. The single correct cache check lives below, after the lines
+    // have been parsed and the content hash is known.
 
     // NIM providers sometimes serialize the array as a string or use
     // {text: ...} objects. Accept all three shapes so one bad-shaped call does
@@ -9820,27 +9897,40 @@ async fn execute_generate_narration_with_state(args: &Value, ctx: &ToolExecution
         return "❌ Error: at most 12 narration lines are supported per video".to_string();
     }
 
-    // ── ARTIFACT IDEMPOTENCY (Nov 23 2026) ──
-    // Tools persist their own outputs. On retry, reuse the cached artifact
-    // instead of regenerating. The LLM never saves anything — the tool does.
+    // ── ARTIFACT IDEMPOTENCY (Nov 23 2026, hardened) ──
+    // Key by a hash of the actual narration lines, not just the workflow id:
+    // a targeted repair that rewrites the script must get fresh TTS instead of
+    // reusing audio for the old words. Identical retries still hit the cache.
+    let cache_voice = args.get("voice").and_then(|v| v.as_str()).unwrap_or("Emma");
+    let cache_gap = args
+        .get("gap_seconds")
+        .and_then(|v| v.as_f64())
+        .unwrap_or(0.35);
+    let narration_stage = format!(
+        "narration:{}",
+        short_hash(&format!("{:?}|{cache_voice}|{cache_gap:.2}", lines))
+    );
     let force_regen = args.get("force_regenerate").and_then(|v| v.as_bool()).unwrap_or(false);
     if !force_regen {
         if let Some(wid) = ctx.workflow_id {
-            if let Some((content, url, meta)) = crate::services::workflow_artifact::WorkflowArtifact::load(&ctx.app_state.db_pool, wid, "narration").await {
+            if let Some((content, url, meta)) = crate::services::workflow_artifact::WorkflowArtifact::load(&ctx.app_state.db_pool, wid, &narration_stage).await {
                 if let (Some(timeline), Some(audio_url)) = (content.as_deref(), url.as_deref()) {
-                    tracing::info!(workflow_id = %wid, "♻️ Reusing existing narration artifact");
-                    return format!(
-                        "♻️ Reusing existing narration (attempt 1 produced this) — skip TTS, proceed to next step.\n\
-                         Audio URL: {}\n\
-                         Duration: {}s\n\
-                         SCENE_TIMELINE_JSON:\n{}\n\n\
-                         ⛔ THIS AUDIO FILE IS NOT THE DELIVERABLE. DO NOT STOP HERE.\n\
-                         NEXT REQUIRED ACTION: call hyperframes_render with an HTML composition built from SCENE_TIMELINE_JSON, \
-                         then add_audio, then review_video, then submit_final_answer with the .mp4.",
-                        audio_url,
-                        meta.get("duration_seconds").and_then(|v| v.as_f64()).unwrap_or(0.0),
-                        timeline
-                    );
+                    if !audio_url.is_empty() && presigned_url_alive(audio_url) {
+                        tracing::info!(workflow_id = %wid, stage = %narration_stage, "♻️ Reusing existing narration artifact");
+                        return format!(
+                            "♻️ Reusing existing narration (attempt 1 produced this) — skip TTS, proceed to next step.\n\
+                             Audio URL: {}\n\
+                             Duration: {}s\n\
+                             SCENE_TIMELINE_JSON:\n{}\n\n\
+                             ⛔ THIS AUDIO FILE IS NOT THE DELIVERABLE. DO NOT STOP HERE.\n\
+                             NEXT REQUIRED ACTION: call hyperframes_render with an HTML composition built from SCENE_TIMELINE_JSON, \
+                             then add_audio, then review_video, then submit_final_answer with the .mp4.",
+                            audio_url,
+                            meta.get("duration_seconds").and_then(|v| v.as_f64()).unwrap_or(0.0),
+                            timeline
+                        );
+                    }
+                    tracing::warn!(workflow_id = %wid, "cached narration URL is empty/expired — regenerating");
                 }
             }
         }
@@ -10019,17 +10109,24 @@ async fn execute_generate_narration_with_state(args: &Value, ctx: &ToolExecution
         &ctx.app_state,
     ).await.ok();
     if let Some(wid) = ctx.workflow_id {
-        crate::services::workflow_artifact::WorkflowArtifact::save(
-            &ctx.app_state.db_pool,
-            wid,
-            "narration",
-            "audio_url",
-            Some(&serde_json::to_string_pretty(&scenes).unwrap_or_else(|_| "[]".to_string())),
-            cloud_url.as_deref().or(Some(&output_file)),
-            Some("b2"),
-            &serde_json::json!({ "duration_seconds": actual_total, "scene_count": scenes.len(), "voice": voice }),
-        ).await;
-        tracing::info!(workflow_id = %wid, "💾 Saved narration artifact to DB");
+        if let Some(ref durable_url) = cloud_url {
+            crate::services::workflow_artifact::WorkflowArtifact::save(
+                &ctx.app_state.db_pool,
+                wid,
+                &narration_stage,
+                "audio_url",
+                Some(&serde_json::to_string_pretty(&scenes).unwrap_or_else(|_| "[]".to_string())),
+                Some(durable_url),
+                Some("cloud"),
+                &serde_json::json!({ "duration_seconds": actual_total, "scene_count": scenes.len(), "voice": voice }),
+            ).await;
+            tracing::info!(workflow_id = %wid, stage = %narration_stage, "💾 Saved narration artifact to DB");
+        } else {
+            // NEVER cache a local-only path as a durable artifact: a requeued
+            // run may land on a different worker where /tmp and outputs/ are
+            // empty, and the retry would reuse a nonexistent file forever.
+            tracing::warn!(workflow_id = %wid, "cloud upload failed — NOT caching local narration path as artifact");
+        }
     }
 
     format!(
@@ -22180,31 +22277,44 @@ async fn execute_hyperframes_render_with_state_claude(
 ) -> String {
     let force_regen = args.get("force_regenerate").and_then(|v| v.as_bool()).unwrap_or(false);
 
-    // ARTIFACT IDEMPOTENCY: reuse existing render if available
-    if !force_regen {
-        if let Some(wid) = ctx.workflow_id {
-            if let Some((composition, render_url, _meta)) = crate::services::workflow_artifact::WorkflowArtifact::load(&ctx.app_state.db_pool, wid, "render").await {
-                if let Some(url) = render_url {
-                    tracing::info!(workflow_id = %wid, "♻️ Reusing existing HyperFrames render");
-                    return format!(
-                        "♻️ Reusing existing render (cached) — skip re-render.\n\
-                         Video URL: {}\n\
-                         Composition HTML (stored, editable):\n{}\n\n\
-                         NEXT: call add_audio(input_file=<this video URL>, audio_file=<narration.mp3>, output_file=<final.mp4>), \
-                         then review_video, then submit_final_answer with the .mp4.",
-                        url,
-                        composition.unwrap_or_else(|| "<composition not stored>".to_string())
-                    );
-                }
-            }
-        }
-    }
-
     let html = args.get("html").and_then(|v| v.as_str()).unwrap_or("");
     if html.trim().is_empty() {
         return "❌ Error: html (complete standalone composition) is required".to_string();
     }
     let resolution = args.get("resolution").and_then(|v| v.as_str());
+
+    // CONTENT-ADDRESSED IDEMPOTENCY: a workflow can render MANY compositions
+    // (one per scene). Keying the cache by stage only ("render") made every
+    // scene after the first reuse scene 1, which caused render loops and
+    // silent/partial outputs. Hash the HTML + resolution instead: an identical
+    // retry still reuses the cached render, a different composition renders.
+    let html_hash = short_hash(&format!("{}|{}", html, resolution.unwrap_or("")));
+    let render_stage = format!("render:{html_hash}");
+    let composition_stage = format!("composition:{html_hash}");
+
+    if !force_regen {
+        if let Some(wid) = ctx.workflow_id {
+            if let Some((composition, render_url, _meta)) = crate::services::workflow_artifact::WorkflowArtifact::load(&ctx.app_state.db_pool, wid, &render_stage).await {
+                if let Some(url) = render_url {
+                    if presigned_url_alive(&url) {
+                        tracing::info!(workflow_id = %wid, stage = %render_stage, "♻️ Reusing existing HyperFrames render");
+                        return format!(
+                            "♻️ Reusing existing render for THIS composition (cached) — do NOT call hyperframes_render again with the same HTML.\n\
+                             Video URL: {}\n\
+                             Composition HTML (stored, editable):\n{}\n\n\
+                             NEXT: call add_audio(input_file=<this video URL>, audio_file=<narration.mp3>, output_file=<final.mp4>), \
+                             then review_video, then submit_final_answer with the .mp4. \
+                             If you need a DIFFERENT scene, send different HTML to hyperframes_render (it renders fresh).",
+                            url,
+                            composition.unwrap_or_else(|| "<composition not stored>".to_string())
+                        );
+                    }
+                    tracing::warn!(workflow_id = %wid, stage = %render_stage, "cached render URL expired — re-rendering");
+                }
+            }
+        }
+    }
+
     let filename = args
         .get("filename")
         .and_then(|v| v.as_str())
@@ -22236,18 +22346,18 @@ async fn execute_hyperframes_render_with_state_claude(
                 Ok(url) => {
                     if let Some(wid) = ctx.workflow_id {
                         crate::services::workflow_artifact::WorkflowArtifact::save(
-                            &ctx.app_state.db_pool, wid, "composition", "html",
+                            &ctx.app_state.db_pool, wid, &composition_stage, "html",
                             Some(html), None, None,
                             &serde_json::json!({}),
                         ).await;
                         crate::services::workflow_artifact::WorkflowArtifact::save(
-                            &ctx.app_state.db_pool, wid, "render", "video_url",
-                            Some(html), Some(&url), Some("b2"),
+                            &ctx.app_state.db_pool, wid, &render_stage, "video_url",
+                            Some(html), Some(&url), Some("cloud"),
                             &serde_json::json!({}),
                         ).await;
-                        tracing::info!(workflow_id = %wid, "💾 Saved HyperFrames composition + render");
+                        tracing::info!(workflow_id = %wid, stage = %render_stage, "💾 Saved HyperFrames composition + render");
                     }
-                    format!("✅ HyperFrames render ready: {url}")
+                    format!("✅ HyperFrames render ready for this composition: {url}")
                 }
                 Err(e) => format!("❌ HyperFrames render done but R2 upload failed: {e}"),
             }
@@ -22320,20 +22430,29 @@ async fn execute_hyperframes_render_with_state_gemini(
     ctx: &ToolExecutionContext,
 ) -> String {
     let force_regen = args.get("force_regenerate").and_then(|v| v.as_bool()).unwrap_or(false);
-    if !force_regen {
-        if let Some(wid) = ctx.workflow_id {
-            if let Some((_comp, render_url, _meta)) = crate::services::workflow_artifact::WorkflowArtifact::load(&ctx.app_state.db_pool, wid, "render").await {
-                if let Some(url) = render_url {
-                    return format!("♻️ Reusing existing render (cached). Video URL: {}\nNEXT: add_audio, review_video, submit_final_answer.", url);
-                }
-            }
-        }
-    }
     let html = args.get("html").and_then(|v| v.as_str()).unwrap_or("");
     if html.trim().is_empty() {
         return "❌ Error: html (complete standalone composition) is required".to_string();
     }
     let resolution = args.get("resolution").and_then(|v| v.as_str());
+
+    // Content-addressed cache (see Claude twin): one cache entry per distinct
+    // HTML composition, not one per workflow.
+    let html_hash = short_hash(&format!("{}|{}", html, resolution.unwrap_or("")));
+    let render_stage = format!("render:{html_hash}");
+    let composition_stage = format!("composition:{html_hash}");
+    if !force_regen {
+        if let Some(wid) = ctx.workflow_id {
+            if let Some((_comp, render_url, _meta)) = crate::services::workflow_artifact::WorkflowArtifact::load(&ctx.app_state.db_pool, wid, &render_stage).await {
+                if let Some(url) = render_url {
+                    if presigned_url_alive(&url) {
+                        return format!("♻️ Reusing existing render for THIS composition (cached) — do NOT re-send this HTML. Video URL: {}\nNEXT: add_audio, review_video, submit_final_answer. Send different HTML for a different scene.", url);
+                    }
+                    tracing::warn!(workflow_id = %wid, stage = %render_stage, "cached render URL expired — re-rendering");
+                }
+            }
+        }
+    }
     let filename = args
         .get("filename")
         .and_then(|v| v.as_str())
@@ -22365,18 +22484,18 @@ async fn execute_hyperframes_render_with_state_gemini(
                 Ok(url) => {
                     if let Some(wid) = ctx.workflow_id {
                         crate::services::workflow_artifact::WorkflowArtifact::save(
-                            &ctx.app_state.db_pool, wid, "composition", "html",
+                            &ctx.app_state.db_pool, wid, &composition_stage, "html",
                             Some(html), None, None,
                             &serde_json::json!({}),
                         ).await;
                         crate::services::workflow_artifact::WorkflowArtifact::save(
-                            &ctx.app_state.db_pool, wid, "render", "video_url",
-                            Some(html), Some(&url), Some("b2"),
+                            &ctx.app_state.db_pool, wid, &render_stage, "video_url",
+                            Some(html), Some(&url), Some("cloud"),
                             &serde_json::json!({}),
                         ).await;
-                        tracing::info!(workflow_id = %wid, "💾 Saved HyperFrames composition + render");
+                        tracing::info!(workflow_id = %wid, stage = %render_stage, "💾 Saved HyperFrames composition + render");
                     }
-                    format!("✅ HyperFrames render ready: {url}")
+                    format!("✅ HyperFrames render ready for this composition: {url}")
                 }
                 Err(e) => format!("❌ HyperFrames render done but R2 upload failed: {e}"),
             }

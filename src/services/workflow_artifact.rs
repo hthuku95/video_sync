@@ -49,9 +49,18 @@ impl WorkflowArtifact {
         storage_backend: Option<&str>,
         metadata: &Value,
     ) {
+        // Ownership guard: a worker whose lease expired may still be executing
+        // after the supervisor requeued the row and another worker claimed it.
+        // Without this guard the zombie's stale output overwrites the live
+        // run's checkpoint rows. Only a workflow that is actively being
+        // executed may write artifacts.
         let _ = sqlx::query(
             r#"INSERT INTO workflow_artifacts (workflow_id, stage, artifact_type, content, storage_url, storage_backend, metadata, updated_at)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
+               SELECT $1, $2, $3, $4, $5, $6, $7, NOW()
+                WHERE EXISTS (
+                    SELECT 1 FROM app_workflows
+                     WHERE id = $1 AND status IN ('running','retrying','planning')
+                )
                ON CONFLICT (workflow_id, stage) DO UPDATE SET
                    artifact_type = EXCLUDED.artifact_type,
                    content = EXCLUDED.content,

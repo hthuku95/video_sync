@@ -3742,6 +3742,18 @@ async fn bulk_send_prospect_emails(
     );
     if !samples_only {
         sql.push_str(" AND business_email IS NOT NULL AND business_email <> ''");
+    } else {
+        // Skip prospects that already have a finished sample or one in flight.
+        // Repeated "Generate Samples" clicks used to enqueue 9 overlapping
+        // batches / 989 items for only 224 unique prospects.
+        sql.push_str(
+            " AND (sample_delivery_id IS NULL OR NOT EXISTS (
+                 SELECT 1 FROM deliveries d
+                  WHERE d.id = prospects.sample_delivery_id
+                    AND (d.status = 'completed'
+                         OR (d.status IN ('pending','running')
+                             AND d.created_at > NOW() - INTERVAL '24 hours'))))",
+        );
     }
     let mut binds: Vec<String> = Vec::new();
     if !req.include_contacted() {
@@ -4468,7 +4480,11 @@ async fn generate_prospect_sample_pack(
 /// starting a new render.
 async fn sample_delivery_is_reusable(pool: &sqlx::PgPool, delivery_id: Uuid) -> bool {
     let state: Option<(String, Option<String>, bool)> = sqlx::query_as(
-        "SELECT status, output_r2_url, created_at > NOW() - INTERVAL '2 hours'
+        // 24h (was 2h): a queued sample can legitimately take hours when the
+        // NIM key is rate-limited. A 2h window made repeated bulk clicks
+        // detach the live delivery and start a duplicate render for the same
+        // prospect (63 prospects had 259 deliveries, 0 completed).
+        "SELECT status, output_r2_url, created_at > NOW() - INTERVAL '24 hours'
            FROM deliveries WHERE id = $1",
     )
     .bind(delivery_id)
@@ -4676,8 +4692,16 @@ pub(crate) async fn create_prospect_sample_pack_core(
     }
 
     // For landing_page: deep-crawl the website via BrowserBase so the LLM agent gets CSS tokens, all pages, and full content
+    // Pre-crawl is OFF by default. The landing/education agent already crawls
+    // the site (STEP 0) inside the workflow, in parallel with other samples.
+    // Doing it here too blocked the single outreach worker for 1-8 minutes per
+    // prospect before the workflow was even enqueued. Set SAMPLE_PRECRAWL=1 to
+    // restore the old double-crawl behavior.
+    let precrawl_enabled = std::env::var("SAMPLE_PRECRAWL")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
     let mut scraped_site = None;
-    if matches!(service.as_str(), "landing_page") && has_product_url {
+    if precrawl_enabled && matches!(service.as_str(), "landing_page") && has_product_url {
         match crate::browserbase_client::crawl_website(&source_url).await {
             Ok(crawl) => {
                 let mut ctx = String::new();

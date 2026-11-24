@@ -39,7 +39,9 @@ jobs:
       - name: Trigger Render deploy
         if: success()
         run: |
-          curl -X POST "https://api.render.com/v1/services/srv-dbi9m69srm7s73dl0i90/deploys" \
+          # The previous service id was deleted — pushes silently 404'd and
+          # production kept running old commits. Deploy the live API instead.
+          curl -X POST "https://api.render.com/v1/services/srv-dbpp0g1srm7s738cv6n0/deploys" \
             -H "Authorization: Bearer $RENDER_API_KEY" || true
         env:
           RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}

@@ -465,29 +465,44 @@ impl AgenticServicePipeline {
         // stops improvising detours mid-render and operators get an inspectable
         // plan artifact (app_workflow_events / trace endpoint). Bounded cost:
         // exactly one extra fast-chain call per RUN (not per attempt).
-        let execution_plan = generate_execution_plan(&state, service_type, &input).await;
-        // Deterministic gate + one retry + guaranteed-sane canned fallback
-        // (owner directive Nov 12 2026): a junk plan used to ship into the
-        // agent with only a log warning.
+        // Sample runs already carry a complete, service-specific tool sequence
+        // in the prompt, so a planner LLM call just adds 1-2 minutes (and NIM
+        // quota) per sample. The canned plan is deterministic and does not
+        // inject disabled tools. Keep the LLM planner for paying workflows.
+        let is_sample_run = input.prospect_id.is_some()
+            || input
+                .idempotency_key
+                .as_deref()
+                .map(|k| k.starts_with("prospect-sample") || k.starts_with("instagram-lead"))
+                .unwrap_or(false);
         let mut plan_source = "llm";
-        let execution_plan: Result<String, String> = match execution_plan {
-            Ok(plan) if plan_is_valid(&plan, service_type) => Ok(plan),
-            Ok(invalid) => {
-                tracing::warn!(workflow_id = %workflow_id, "planner output invalid — retrying once");
-                let _ = invalid;
-                let retry = generate_execution_plan(&state, service_type, &input).await;
-                match retry {
-                    Ok(plan) if plan_is_valid(&plan, service_type) => Ok(plan),
-                    _ => {
-                        plan_source = "canned_fallback";
-                        Ok(canned_plan(service_type, input.delivery_id))
+        let execution_plan: Result<String, String> = if is_sample_run {
+            plan_source = "canned_sample";
+            Ok(canned_plan(service_type, input.delivery_id))
+        } else {
+            let generated = generate_execution_plan(&state, service_type, &input).await;
+            // Deterministic gate + one retry + guaranteed-sane canned fallback
+            // (owner directive Nov 12 2026): a junk plan used to ship into the
+            // agent with only a log warning.
+            match generated {
+                Ok(plan) if plan_is_valid(&plan, service_type) => Ok(plan),
+                Ok(invalid) => {
+                    tracing::warn!(workflow_id = %workflow_id, "planner output invalid — retrying once");
+                    let _ = invalid;
+                    let retry = generate_execution_plan(&state, service_type, &input).await;
+                    match retry {
+                        Ok(plan) if plan_is_valid(&plan, service_type) => Ok(plan),
+                        _ => {
+                            plan_source = "canned_fallback";
+                            Ok(canned_plan(service_type, input.delivery_id))
+                        }
                     }
                 }
-            }
-            Err(e) => {
-                tracing::warn!(workflow_id = %workflow_id, "execution plan generation failed — using canned plan: {e}");
-                plan_source = "canned_fallback";
-                Ok(canned_plan(service_type, input.delivery_id))
+                Err(e) => {
+                    tracing::warn!(workflow_id = %workflow_id, "execution plan generation failed — using canned plan: {e}");
+                    plan_source = "canned_fallback";
+                    Ok(canned_plan(service_type, input.delivery_id))
+                }
             }
         };
         let mut agent_prompt = Self::build_agent_prompt(service_type, &input, &output_dir);
@@ -892,9 +907,10 @@ impl AgenticServicePipeline {
 
         // Clean up local files — all media lives in R2 now
         let _ = std::fs::remove_dir_all(&output_dir);
-        // Clean up downloaded cloud URLs (from resolve_local_path) — transient only
-        let _ = std::fs::remove_dir_all("/tmp/vs_dl");
-        let _ = std::fs::create_dir_all("/tmp/vs_dl");
+        // /tmp/vs_dl is SHARED by every worker in this process. Deleting the
+        // whole directory after one run broke other concurrent workflows that
+        // were mid-download (empty/partial renders). Only evict stale files.
+        cleanup_stale_downloads(std::time::Duration::from_secs(6 * 3600));
 
         // Terminal completion — ownership-aware when running under the
         // durable queue: if our lease was lost (process replaced, supervisor
@@ -1141,33 +1157,32 @@ impl AgenticServicePipeline {
                         .parent()
                         .map(|p| p.to_path_buf())
                         .unwrap_or_else(|| std::path::PathBuf::from("."));
-                    let mut newest_audio: Option<(std::path::PathBuf, std::time::SystemTime)> =
-                        None;
-                    if let Ok(entries) = std::fs::read_dir(&dir) {
-                        for entry in entries.flatten() {
-                            let p = entry.path();
-                            let e = p
-                                .extension()
-                                .and_then(|x| x.to_str())
-                                .unwrap_or("")
-                                .to_lowercase();
-                            if matches!(e.as_str(), "mp3" | "wav" | "m4a" | "aac") {
-                                let modified = entry
-                                    .metadata()
-                                    .and_then(|m| m.modified())
-                                    .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
-                                if newest_audio
-                                    .as_ref()
-                                    .map(|(_, t)| modified > *t)
-                                    .unwrap_or(true)
-                                {
-                                    newest_audio = Some((p, modified));
-                                }
-                            }
+                    // The final render is often staged in /tmp, while narration
+                    // lives in outputs/agentic_<delivery>/narration.mp3. Search
+                    // both, then fall back to the narration artifact URL.
+                    let delivery_output_dir =
+                        std::path::PathBuf::from(format!("outputs/agentic_{}", input.delivery_id));
+                    let mut candidates: Vec<std::path::PathBuf> = Vec::new();
+                    if let Some(p) = newest_audio_in_dir(&dir) {
+                        candidates.push(p);
+                    }
+                    if delivery_output_dir != dir {
+                        if let Some(p) = newest_audio_in_dir(&delivery_output_dir) {
+                            candidates.push(p);
                         }
                     }
-                    match newest_audio {
-                        Some((audio_file, _)) => {
+                    let artifact_audio = if candidates.is_empty() {
+                        fetch_narration_artifact(&state, input.delivery_id).await
+                    } else {
+                        None
+                    };
+                    let audio_file = candidates
+                        .into_iter()
+                        .next()
+                        .map(|p| p.to_string_lossy().to_string())
+                        .or(artifact_audio);
+                    match audio_file {
+                        Some(audio_file) => {
                             let stem = std::path::Path::new(&final_path)
                                 .file_stem()
                                 .and_then(|x| x.to_str())
@@ -1176,20 +1191,29 @@ impl AgenticServicePipeline {
                             let repaired = format!("{}/{}_with_audio.mp4", dir.display(), stem);
                             tracing::warn!(
                                 "publish_output: final video has NO audio — auto-muxing narration {} -> {}",
-                                audio_file.display(),
+                                audio_file,
                                 repaired
                             );
-                            crate::audio::add_audio(
-                                output_path,
-                                audio_file.to_str().unwrap_or(""),
-                                &repaired,
-                            )?;
+                            // Use final_path (the validated local file), NOT
+                            // output_path (which may be a cloud URL).
+                            crate::audio::add_audio(&final_path, &audio_file, &repaired)?;
+                            let repaired_meta = crate::core::analyze_video(&repaired)
+                                .map_err(|e| format!(
+                                    "ARTIFACT_INVALID: auto-muxed file cannot be probed ({e})"
+                                ))?;
+                            if !repaired_meta.has_audio || !repaired_meta.has_video {
+                                return Err(format!(
+                                    "ARTIFACT_INVALID: auto-mux produced an invalid deliverable ({} — audio={}, video={})",
+                                    repaired, repaired_meta.has_audio, repaired_meta.has_video
+                                ));
+                            }
                             final_path = repaired;
                         }
                         None => {
                             let msg = format!(
-                                "ARTIFACT_INVALID: final video has NO audio stream and no narration audio file was found next to {}. Re-run generate_text_to_speech then add_audio before export_video.",
-                                final_path
+                                "ARTIFACT_INVALID: final video has NO audio stream and no narration audio file was found next to {} or in {} (nor a narration artifact). Re-run generate_narration then add_audio before export_video.",
+                                final_path,
+                                delivery_output_dir.display()
                             );
                             tracing::error!("publish_output: {}", msg);
                             return Err(msg);
@@ -1439,11 +1463,12 @@ Before writing anything, research the topic using the web-crawling infrastructur
 ## MANDATORY TOOL SEQUENCE (NARRATION-FIRST — DO NOT SKIP OR REORDER)
 1. generate_video_script(topic="{brief}", duration={duration_seconds}, style="{style}", tone="professional"). Split the lesson into {scene_count} scenes (≈20-25s each), one short narration line per scene. NARRATION DENSITY: for a scene of T seconds its narration must run ~T×0.6 seconds of speech (≈30-38 words per 15s scene). Target 70-85% speech coverage for the whole video — dense but breathable (leave the 0.35s line gaps, a beat after the hook, and a hold on the final CTA; never wall-to-wall talking). Hard floor: coverage below 60% is a quality failure. Each scene's plan MUST also name the HyperFrames features it will use (menu: VFX shaders, Slug kinetic typography, d3 charts, GSAP timelines, Lottie, audio-reactive motion, masks, CSS perspective/parallax) — the whole lesson must use at least 3 distinct features and no two consecutive scenes may use an identical feature set. Ground every factual claim in the Step 0 research.
 2. generate_narration(lines=[...], voice="Emma", output_file="{out}/narration.mp3", gap_seconds=0.35) — synthesize the voice track and get the exact SCENE_TIMELINE_JSON. This is the clock for the whole lesson. Call it ONCE with all scene lines. If it errors, fix the arguments and retry once; do NOT fall back to per-line generate_text_to_speech and do NOT call auto_generate_video. Then SELF-CHECK density from SCENE_TIMELINE_JSON: (sum of scene speech durations ÷ {duration_seconds}) must be ≥ 0.6 (target 0.70–0.85) — if it is lower, rewrite the scene lines denser and re-run generate_narration BEFORE rendering anything.
-3. Render each scene to EXACTLY its timeline duration:
-   - hyperframes_render(html=..., resolution=...) — for titles, kinetic typography, layouts, animated backgrounds, intro/outro sequences, and ALL 2D/3D motion graphics. You have FULL access to every HyperFrames feature — use them freely and creatively: 50+ cinematic VFX shaders (glitch, film grain, chromatic aberration, bloom, halftone, CRT, etc.), Slug GPU vector typography (word-by-word kinetic reveals), d3 animated charts and data visualizations, a unified 3D scene graph with glTF import and PBR materials, GSAP timelines, Lottie animation playback, audio visualization/reactive motion, transitions, masks, and CSS perspective/parallax. Pick whichever combination best serves the lesson content. Its root data-duration and scene data-start/data-duration MUST equal the timeline. CPU-rendered, no GPU needed. Implement EVERY feature named in each scene's plan — a scene whose HTML ignores its planned features is a quality failure.
-   - Blender/Manim are UNAVAILABLE on this deployment: NEVER call manim_execute_script, blender_generate_scene_type, or blender_execute_bpy_script. Render equations, diagrams, code animations, data charts, and LaTeX-style formulas with hyperframes_render (HTML/CSS + d3). Simulate 3D-looking depth with CSS perspective/parallax.
-   - Keep EVERY scene inside its own duration; when merging, preserve the narration timeline exactly.
-4. merge_videos the scene clips in narration order, then add_audio(input_file="{out}/merged.mp4", audio_file="{out}/narration.mp3", output_file="{out}/output.mp4"). Do NOT call add_voiceover_to_video in this service — it creates a second, unsynchronized track.
+3. Render ONE hyperframes_render(html=..., resolution=...) containing ALL scenes on a single timeline:
+   - Build a single standalone HTML composition. Root data-duration = total narration duration. Each scene is a <section data-start="..." data-duration="..."> positioned exactly on SCENE_TIMELINE_JSON; scenes tile end-to-end with no gaps/overlaps.
+   - hyperframes_render has FULL access to every HyperFrames feature — use them freely: 50+ cinematic VFX shaders (glitch, film grain, chromatic aberration, bloom, halftone, CRT, etc.), Slug GPU vector typography (word-by-word kinetic reveals), d3 animated charts and data visualizations, a unified 3D scene graph with glTF import and PBR materials, GSAP timelines, Lottie animation playback, audio visualization/reactive motion, transitions, masks, and CSS perspective/parallax. Implement EVERY feature named in each scene's plan — a scene whose HTML ignores its planned features is a quality failure.
+   - Blender/Manim are UNAVAILABLE: NEVER call manim_execute_script, blender_generate_scene_type, or blender_execute_bpy_script. Render equations, diagrams, code animations, data charts, and LaTeX-style formulas with hyperframes_render (HTML/CSS + d3). Simulate 3D-looking depth with CSS perspective/parallax.
+   - Do NOT render one clip per scene. Do NOT call merge_videos. ONE render produces the whole lesson.
+4. add_audio(input_file=<that render.mp4>, audio_file="{out}/narration.mp3", output_file="{out}/output.mp4"). Do NOT call add_voiceover_to_video in this service — it creates a second, unsynchronized track.
 5. POST-PRODUCTION (optional polish): add real transcribed captions via transcribe_audio_url (never placeholder text), brand/logo, color and subtle music. Never change scene boundaries or mask narration. Text must fit with safe margins; no cropped words, no overlapping titles/formulas.
 6. review_video(video_path_or_url="{out}/output.mp4", original_request="{brief}", expected_features=["audible narration","scene changes stay in sync with narration","no cropped, truncated, or overlapping text","all formulas fully visible","no blank or partial frames","every scene implements the HyperFrames features named in its plan (at least 3 distinct features across the lesson, not just fades)"])
 7. submit_final_answer(summary="education video {title}", output_files=["{out}/output.mp4"])
@@ -2138,7 +2163,7 @@ async fn generate_execution_plan(
     let tool_hints = match service_type {
         ServiceType::Clipping => "generate_clip_compilation (downloads + extracts + captions clips), kick_post_processing happens automatically; final artifacts are clip URLs",
         ServiceType::LandingPage => "browserbase_crawl_website (read the source site first), generate_video_script, generate_narration (audio-first timing), hyperframes_render, add_audio, review_video, submit_final_answer",
-        ServiceType::Education => "browserbase_crawl_website (research the topic from authoritative sources FIRST), vectorize_crawled_content, search_crawled_content, generate_video_script, generate_narration (audio-first timing), hyperframes_render, manim_execute_script (only for equations/diagrams/LaTeX), merge_videos, add_audio, review_video, submit_final_answer",
+        ServiceType::Education => "browserbase_crawl_website (research the topic from authoritative sources FIRST), vectorize_crawled_content, search_crawled_content, generate_video_script, generate_narration (audio-first timing), hyperframes_render (ONE composition containing all scenes), add_audio, review_video, submit_final_answer",
         // Tailored TOOL chains for the other narrative services (owner
         // directive Nov 13 2026): every plan must reflect how ITS video type
         // is built. Feature narrowing is NOT allowed — every hyperframes_render
@@ -2286,7 +2311,7 @@ fn canned_plan(service_type: ServiceType, delivery_id: Uuid) -> String {
             "browserbase_crawl_website(source url) -> crawled facts",
             "generate_video_script(facts, brief) -> scene plan",
             "generate_narration(scene lines) -> narration.mp3 + timeline",
-            "hyperframes_render(scene compositions) -> visuals.mp4",
+            "hyperframes_render(ONE composition with all scenes) -> visuals.mp4",
             "add_audio(visuals, narration) -> output.mp4",
             "review_video(output.mp4) -> QA pass",
             "submit_final_answer(output.mp4) -> delivered video",
@@ -2296,9 +2321,8 @@ fn canned_plan(service_type: ServiceType, delivery_id: Uuid) -> String {
             "vectorize_crawled_content + search_crawled_content -> grounded fact set",
             "generate_video_script(grounded facts, brief) -> scene plan",
             "generate_narration(scene lines) -> narration.mp3 + timeline",
-            "hyperframes_render(scene compositions) -> visuals.mp4",
-            "merge_videos(scene clips) -> merged.mp4",
-            "add_audio(merged, narration) -> output.mp4",
+            "hyperframes_render(ONE composition with all scenes) -> visuals.mp4",
+            "add_audio(visuals, narration) -> output.mp4",
             "review_video(output.mp4) -> QA pass",
             "submit_final_answer(output.mp4) -> delivered video",
         ],
@@ -2454,6 +2478,109 @@ fn is_image_url(url: &str) -> bool {
         || url.contains(".webp")
 }
 
+fn is_audio_url(url: &str) -> bool {
+    url.contains(".mp3")
+        || url.contains(".wav")
+        || url.contains(".m4a")
+        || url.contains(".aac")
+        || url.contains(".ogg")
+}
+
+/// Pick the most deliverable media when an agent result mentions several URLs.
+/// A video must always beat narration audio — otherwise publish_output grabs
+/// the first narration.mp3 URL and fails with "NO video stream".
+fn media_rank(url: &str) -> u8 {
+    if is_video_url(url) {
+        3
+    } else if is_image_url(url) {
+        2
+    } else if is_audio_url(url) {
+        1
+    } else {
+        0
+    }
+}
+
+/// Evict stale files from the shared download cache. Never removes the
+/// directory itself: concurrent workers may be reading another file from it.
+fn cleanup_stale_downloads(max_age: std::time::Duration) {
+    let Ok(entries) = std::fs::read_dir("/tmp/vs_dl") else {
+        return;
+    };
+    let now = std::time::SystemTime::now();
+    for entry in entries.flatten() {
+        let expired = entry
+            .metadata()
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| now.duration_since(t).ok())
+            .map(|age| age > max_age)
+            .unwrap_or(false);
+        if expired {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
+}
+
+/// Newest audio file in a directory (mp3/wav/m4a/aac/ogg).
+fn newest_audio_in_dir(dir: &std::path::Path) -> Option<std::path::PathBuf> {
+    let mut newest: Option<(std::path::PathBuf, std::time::SystemTime)> = None;
+    for entry in std::fs::read_dir(dir).ok()?.flatten() {
+        let p = entry.path();
+        let ext = p
+            .extension()
+            .and_then(|x| x.to_str())
+            .unwrap_or("")
+            .to_lowercase();
+        if !matches!(ext.as_str(), "mp3" | "wav" | "m4a" | "aac" | "ogg") {
+            continue;
+        }
+        let modified = entry
+            .metadata()
+            .and_then(|m| m.modified())
+            .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+        if newest.as_ref().map(|(_, t)| modified > *t).unwrap_or(true) {
+            newest = Some((p, modified));
+        }
+    }
+    newest.map(|(p, _)| p)
+}
+
+/// Pull the narration artifact recorded by generate_narration down to /tmp.
+/// publish_output stages the final video in /tmp, so looking only "next to"
+/// that file missed narrations in outputs/agentic_<delivery>/ — the cause of
+/// the recurring "NO audio stream and no narration found next to /tmp/..." errors.
+async fn fetch_narration_artifact(state: &AppState, delivery_id: Uuid) -> Option<String> {
+    let url: Option<String> = sqlx::query_scalar(
+        "SELECT a.storage_url
+           FROM workflow_artifacts a
+           JOIN deliveries d ON d.workflow_id = a.workflow_id
+          WHERE d.id = $1 AND a.stage LIKE 'narration%' AND a.storage_url IS NOT NULL
+          ORDER BY a.updated_at DESC
+          LIMIT 1",
+    )
+    .bind(delivery_id)
+    .fetch_optional(&state.db_pool)
+    .await
+    .ok()
+    .flatten();
+
+    let url = url?;
+    let resp = reqwest::get(&url).await.ok()?;
+    if !resp.status().is_success() {
+        tracing::warn!("fetch_narration_artifact: HTTP {} for {}", resp.status(), url);
+        return None;
+    }
+    let bytes = resp.bytes().await.ok()?;
+    if bytes.len() < 1_000 {
+        tracing::warn!("fetch_narration_artifact: only {} bytes from {}", bytes.len(), url);
+        return None;
+    }
+    let path = format!("/tmp/narration_{}.mp3", uuid::Uuid::new_v4());
+    tokio::fs::write(&path, &bytes).await.ok()?;
+    Some(path)
+}
+
 fn locate_output_from_result(
     agent_result: &Result<String, String>,
     output_dir: &str,
@@ -2476,10 +2603,10 @@ fn locate_output_from_result(
             .or_else(|| trimmed.strip_prefix("Cloud URL: "))
         {
             let url = url.trim().to_string();
-            let should_replace = match &cloud_url {
-                None => true,
-                Some(current) => is_image_url(current) && is_video_url(&url),
-            };
+            let should_replace = cloud_url
+                .as_deref()
+                .map(|current| media_rank(&url) > media_rank(current))
+                .unwrap_or(true);
             if should_replace {
                 cloud_url = Some(url);
             }
@@ -2492,12 +2619,12 @@ fn locate_output_from_result(
                 || trimmed.contains(".webm")
                 || trimmed.contains(".jpg"))
         {
-            if cloud_url.is_none() {
+            let should_replace = cloud_url
+                .as_deref()
+                .map(|current| media_rank(trimmed) > media_rank(current))
+                .unwrap_or(true);
+            if should_replace {
                 cloud_url = Some(trimmed.to_string());
-            } else if let Some(ref current) = cloud_url {
-                if is_image_url(current) && is_video_url(trimmed) {
-                    cloud_url = Some(trimmed.to_string());
-                }
             }
         }
         // Local file path that exists
@@ -2514,8 +2641,14 @@ fn locate_output_from_result(
                 .trim_start_matches("**")
                 .trim_end_matches("**")
                 .trim();
-            if std::path::Path::new(path).exists() && local_path.is_none() {
-                local_path = Some(path.to_string());
+            if std::path::Path::new(path).exists() {
+                let should_replace = local_path
+                    .as_deref()
+                    .map(|current| media_rank(path) > media_rank(current))
+                    .unwrap_or(true);
+                if should_replace {
+                    local_path = Some(path.to_string());
+                }
             }
         }
     }
