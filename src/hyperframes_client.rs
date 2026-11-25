@@ -8,6 +8,7 @@
 //! Used by the `hyperframes_render` agent tool (education + landing_page
 //! services take Blender's old slots; Manim is untouched).
 
+use base64::Engine;
 use reqwest::Client;
 use serde_json::Value;
 
@@ -190,8 +191,69 @@ impl HyperFramesClient {
     }
 
     /// Submit an HTML composition. Returns the shim job_id.
+    /// Download every remote media URL referenced by the composition into a
+    /// bundle that the shim writes next to index.html. The HTML is rewritten to
+    /// relative paths, so the renderer never needs outbound network access.
+    async fn media_bundle(&self, html: &str) -> (String, Vec<Value>) {
+        let mut matches = Vec::new();
+        let mut pos = 0usize;
+        while pos < html.len() {
+            let Some(rel) = html[pos..].find("src=\"http") else {
+                break;
+            };
+            let start = pos + rel + "src=\"".len();
+            let Some(end_rel) = html[start..].find('"') else {
+                break;
+            };
+            let end = start + end_rel;
+            matches.push((start, end, html[start..end].to_string()));
+            pos = end + 1;
+        }
+        if matches.is_empty() {
+            return (html.to_string(), Vec::new());
+        }
+
+        let mut out = html.to_string();
+        let mut media = Vec::new();
+        for (start, end, url) in matches.into_iter().rev().take(12) {
+            let response = match self.client.get(&url).send().await {
+                Ok(r) if r.status().is_success() => r,
+                _ => continue,
+            };
+            let bytes = match response.bytes().await {
+                Ok(b) if b.len() > 1_000 && b.len() < 5_000_000 => b.to_vec(),
+                _ => continue,
+            };
+            let lower = url.to_ascii_lowercase();
+            let ext = if lower.contains(".png") {
+                "png"
+            } else if lower.contains(".webp") {
+                "webp"
+            } else if lower.contains(".gif") {
+                "gif"
+            } else if lower.contains(".mp4") {
+                "mp4"
+            } else if lower.contains(".webm") {
+                "webm"
+            } else {
+                "jpg"
+            };
+            let name = format!("media_{}.{}", uuid::Uuid::new_v4(), ext);
+            media.push(serde_json::json!({
+                "name": name,
+                "data": base64::engine::general_purpose::STANDARD.encode(&bytes),
+            }));
+            out.replace_range(start..end, &format!("media/{name}"));
+        }
+        (out, media)
+    }
+
     pub async fn submit(&self, html: &str, resolution: Option<&str>) -> Result<String, String> {
-        let mut body = serde_json::json!({ "html": html });
+        let (html_body, media) = self.media_bundle(html).await;
+        let mut body = serde_json::json!({ "html": html_body });
+        if !media.is_empty() {
+            body["media"] = serde_json::json!(media);
+        }
         if let Some(r) = resolution {
             if ["portrait", "landscape", "square"].contains(&r) {
                 body["resolution"] = serde_json::Value::String(r.to_string());

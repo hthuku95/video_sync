@@ -48,6 +48,15 @@ fn hyperframes_contract_error(html: &str) -> Option<String> {
     if !has_media {
         missing.push("real media or 3D: an <img>/<video>/<canvas> element or a three.js/Polyfork (createAsset) import");
     }
+    // A minimal HTML that only satisfies the structural checks is still a
+    // quality failure. Reject debug/placeholder compositions explicitly.
+    let lower_html = html.to_ascii_lowercase();
+    if ["scene 1 -", "scene 2 -", "lorem ipsum", "placeholder", "test composition", "hello world"]
+        .iter()
+        .any(|needle| lower_html.contains(needle))
+    {
+        missing.push("real scene content — placeholder/debug text found");
+    }
     if missing.is_empty() {
         None
     } else {
