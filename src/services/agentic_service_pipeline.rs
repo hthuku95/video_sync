@@ -1776,6 +1776,7 @@ Save your final video as .mp4 (landscape 16:9 recommended)"#,
 
 ### Quality bar and final output
 - Use at least 3 distinct HyperFrames features per video (VFX shaders, Slug kinetic typography, d3 charts, GSAP timelines, Lottie, audio-reactive motion, masks, CSS perspective/parallax). Put the prospect's real hero image/product screenshot in the composition when available. A video that is only text on a flat background is a quality failure.
+- MEDIA POLICY (non-negotiable): all media must live in our cloud storage buckets, never on the app server and never as data URIs. Never put a raw `images.pexels.com` / `videos.pexels.com` URL into the HTML. Always call `pexels_download_photo` or `pexels_download_video` (they download and upload to the bucket) and use the returned cloud URL in the composition. Score Pexels candidates with `analyze_pexels_thumbnail` (NVIDIA NIM vision via the model fallback chain), never with Gemini directly.
 - Audio-first: generate_video_script -> generate_narration (timeline is the clock) -> hyperframes_render -> add_audio -> review_video -> submit_final_answer with the .mp4. Never submit narration audio or an image as the final deliverable. Blender and Manim are DISABLED on every service; use HyperFrames for all visuals including equations, charts and diagrams."#
     }
 

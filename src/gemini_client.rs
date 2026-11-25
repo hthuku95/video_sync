@@ -2874,7 +2874,7 @@ impl GeminiClient {
                     },
                     FunctionDeclaration {
                         name: "analyze_pexels_thumbnail".to_string(),
-                        description: "Download a Pexels thumbnail URL and score its relevance to the video topic using Gemini vision (1-10). Use AFTER pexels_search, on each result's video_pictures[0].picture URL, BEFORE pexels_download_video. Score >= 5 → proceed; score < 5 → skip.".to_string(),
+                        description: "Download a Pexels thumbnail URL and score its relevance to the video topic (1-10) using the NVIDIA NIM vision model via the normal model fallback chain (Gemini only as a last resort, never first). Use AFTER pexels_search, on each result's video_pictures[0].picture URL, BEFORE pexels_download_video. Score >= 5 → proceed; score < 5 → skip.".to_string(),
                         parameters: Parameters {
                             param_type: "object".to_string(),
                             properties: {

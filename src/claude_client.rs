@@ -1734,7 +1734,7 @@ impl ClaudeClient {
             },
             ClaudeTool {
                 name: "analyze_pexels_thumbnail".to_string(),
-                description: "Download a Pexels video thumbnail URL and analyze it with Gemini vision to score its relevance to your video topic (1-10). Use this AFTER pexels_search, on each result's video_pictures[0].picture URL, BEFORE calling pexels_download_video — so you only download full clips that are actually relevant. Score >= 5 means proceed; score < 5 means skip and try the next result.".to_string(),
+                description: "Download a Pexels video thumbnail URL and score its relevance to your video topic (1-10) with the NVIDIA NIM vision model through the normal model fallback chain (Gemini only as a last resort, never first). Use this AFTER pexels_search, on each result's video_pictures[0].picture URL, BEFORE calling pexels_download_video — so you only download full clips that are actually relevant. Score >= 5 means proceed; score < 5 means skip and try the next result.".to_string(),
                 input_schema: InputSchema {
                     schema_type: "object".to_string(),
                     properties: HashMap::from([

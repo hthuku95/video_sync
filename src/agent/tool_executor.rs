@@ -63,6 +63,104 @@ fn hyperframes_contract_error(html: &str) -> Option<String> {
     }
 }
 
+/// MANDATORY owner policy: no media may live on the application server or be
+/// embedded in HTML as a data URI. Every `<img>`/`<video>` source referenced by
+/// a composition must point at a cloud bucket. External sources (e.g. raw
+/// `images.pexels.com` URLs the agent copied from a search result) are
+/// downloaded transiently, uploaded to our cloud storage, and the src is
+/// rewritten to the returned cloud URL before rendering.
+async fn cloudify_composition_media(html: &str, ctx: &ToolExecutionContext) -> String {
+    let mut matches = Vec::new();
+    let mut pos = 0usize;
+    while pos < html.len() {
+        let Some(rel) = html[pos..].find("src=\"") else {
+            break;
+        };
+        let start = pos + rel + "src=\"".len();
+        let Some(end_rel) = html[start..].find('"') else {
+            break;
+        };
+        let end = start + end_rel;
+        let src = html[start..end].to_string();
+        if !src.is_empty() {
+            matches.push((start, end, src));
+        }
+        pos = end + 1;
+    }
+    if matches.is_empty() {
+        return html.to_string();
+    }
+
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(20))
+        .build()
+        .unwrap_or_default();
+    let mut out = html.to_string();
+    for (start, end, src) in matches.into_iter().rev().take(6) {
+        let lower = src.to_ascii_lowercase();
+        // Already in a cloud bucket (or embedded) — leave untouched.
+        if lower.starts_with("data:")
+            || lower.contains("backblazeb2.com")
+            || lower.contains("r2.dev")
+            || lower.contains("amazonaws.com")
+            || lower.contains("videosync.ink")
+        {
+            continue;
+        }
+        let (ext, mime) = if lower.contains(".png") {
+            ("png", "image/png")
+        } else if lower.contains(".webp") {
+            ("webp", "image/webp")
+        } else if lower.contains(".gif") {
+            ("gif", "image/gif")
+        } else if lower.contains(".mp4") {
+            ("mp4", "video/mp4")
+        } else if lower.contains(".webm") {
+            ("webm", "video/webm")
+        } else {
+            ("jpg", "image/jpeg")
+        };
+        let bytes = if lower.starts_with("http") {
+            match client.get(&src).send().await {
+                Ok(response) if response.status().is_success() => match response.bytes().await {
+                    Ok(b) if b.len() > 1_000 && b.len() < 5_000_000 => b.to_vec(),
+                    _ => continue,
+                },
+                _ => continue,
+            }
+        } else {
+            match tokio::fs::read(&src).await {
+                Ok(b) if b.len() > 1_000 => b,
+                _ => continue,
+            }
+        };
+        let tmp = format!("/tmp/hf_media_{}.{}", uuid::Uuid::new_v4(), ext);
+        if tokio::fs::write(&tmp, &bytes).await.is_err() {
+            continue;
+        }
+        let cloud_url = match crate::cloud_storage::upload_local_file_to_cloud(
+            &tmp,
+            mime,
+            ctx.user_id.unwrap_or(0),
+            &ctx.session_id,
+            ctx.workflow_id,
+            &ctx.app_state,
+        )
+        .await
+        {
+            Ok(url) => url,
+            Err(e) => {
+                tracing::warn!("cloudify_composition_media: upload failed for {src}: {e}");
+                let _ = tokio::fs::remove_file(&tmp).await;
+                continue;
+            }
+        };
+        let _ = tokio::fs::remove_file(&tmp).await;
+        out.replace_range(start..end, &cloud_url);
+    }
+    out
+}
+
 /// Short, stable content hash used for content-addressed artifact cache keys.
 /// A workflow may render many different HTML compositions (one per scene);
 /// caching by stage alone would return scene 1 for every subsequent scene.
@@ -8585,7 +8683,8 @@ fn execute_generate_video_queries_gemini(args: &HashMap<String, Value>) -> Strin
     }
 }
 
-/// Download a Pexels thumbnail URL and analyze it with Gemini vision for topic relevance (Claude).
+/// Download a Pexels thumbnail URL and score relevance with NVIDIA NIM vision
+/// through the standard model fallback chain (Gemini only as last resort).
 async fn execute_analyze_pexels_thumbnail_claude(args: &Value) -> String {
     let thumbnail_url = args["thumbnail_url"].as_str().unwrap_or("");
     let topic = args
@@ -8619,7 +8718,8 @@ async fn execute_analyze_pexels_thumbnail_claude(args: &Value) -> String {
     )
 }
 
-/// Download a Pexels thumbnail URL and analyze it with Gemini or NIM vision for topic relevance (Gemini dispatch).
+/// Download a Pexels thumbnail URL and score relevance with NVIDIA NIM vision
+/// through the standard model fallback chain (Gemini dispatch arm).
 async fn execute_analyze_pexels_thumbnail_gemini(args: &HashMap<String, Value>) -> String {
     let thumbnail_url = args
         .get("thumbnail_url")
@@ -22380,6 +22480,8 @@ async fn execute_hyperframes_render_with_state_claude(
     if let Some(error) = hyperframes_contract_error(html) {
         return error;
     }
+    // Owner policy: every media asset must be stored in a cloud bucket.
+    let html = cloudify_composition_media(html, ctx).await;
     let resolution = args.get("resolution").and_then(|v| v.as_str());
 
     // CONTENT-ADDRESSED IDEMPOTENCY: a workflow can render MANY compositions
@@ -22430,7 +22532,7 @@ async fn execute_hyperframes_render_with_state_claude(
             crate::hyperframes_client::HyperFramesClient::new(base_url)
         }
     };
-    match client.render_html(html, resolution, filename, 1800).await {
+    match client.render_html(&html, resolution, filename, 1800).await {
         Ok(local_path) => {
             match crate::cloud_storage::upload_local_file_to_cloud(
                 &local_path,
@@ -22446,12 +22548,12 @@ async fn execute_hyperframes_render_with_state_claude(
                     if let Some(wid) = ctx.workflow_id {
                         crate::services::workflow_artifact::WorkflowArtifact::save(
                             &ctx.app_state.db_pool, wid, &composition_stage, "html",
-                            Some(html), None, None,
+                            Some(&html), None, None,
                             &serde_json::json!({}),
                         ).await;
                         crate::services::workflow_artifact::WorkflowArtifact::save(
                             &ctx.app_state.db_pool, wid, &render_stage, "video_url",
-                            Some(html), Some(&url), Some("cloud"),
+                            Some(&html), Some(&url), Some("cloud"),
                             &serde_json::json!({}),
                         ).await;
                         tracing::info!(workflow_id = %wid, stage = %render_stage, "💾 Saved HyperFrames composition + render");
@@ -22536,6 +22638,8 @@ async fn execute_hyperframes_render_with_state_gemini(
     if let Some(error) = hyperframes_contract_error(html) {
         return error;
     }
+    // Owner policy: every media asset must be stored in a cloud bucket.
+    let html = cloudify_composition_media(html, ctx).await;
     let resolution = args.get("resolution").and_then(|v| v.as_str());
 
     // Content-addressed cache (see Claude twin): one cache entry per distinct
@@ -22571,7 +22675,7 @@ async fn execute_hyperframes_render_with_state_gemini(
             crate::hyperframes_client::HyperFramesClient::new(base_url)
         }
     };
-    match client.render_html(html, resolution, filename, 1800).await {
+    match client.render_html(&html, resolution, filename, 1800).await {
         Ok(local_path) => {
             match crate::cloud_storage::upload_local_file_to_cloud(
                 &local_path,
@@ -22587,12 +22691,12 @@ async fn execute_hyperframes_render_with_state_gemini(
                     if let Some(wid) = ctx.workflow_id {
                         crate::services::workflow_artifact::WorkflowArtifact::save(
                             &ctx.app_state.db_pool, wid, &composition_stage, "html",
-                            Some(html), None, None,
+                            Some(&html), None, None,
                             &serde_json::json!({}),
                         ).await;
                         crate::services::workflow_artifact::WorkflowArtifact::save(
                             &ctx.app_state.db_pool, wid, &render_stage, "video_url",
-                            Some(html), Some(&url), Some("cloud"),
+                            Some(&html), Some(&url), Some("cloud"),
                             &serde_json::json!({}),
                         ).await;
                         tracing::info!(workflow_id = %wid, stage = %render_stage, "💾 Saved HyperFrames composition + render");
