@@ -35,6 +35,19 @@ fn hyperframes_contract_error(html: &str) -> Option<String> {
     if !html.contains("window.__timelines") {
         missing.push("window.__timelines registration of one paused gsap.timeline");
     }
+    let scene_count = html.matches("class=\"clip\"").count()
+        + html.matches("class='clip'").count();
+    if scene_count < 2 {
+        missing.push("at least 2 timed scenes (class=\"clip\" with data-start/data-duration)");
+    }
+    // A text-only composition is a quality failure even when timing is valid.
+    let lower = html.to_ascii_lowercase();
+    let has_media = ["<img", "<video", "<canvas", "createasset", "three", "polyfork", "gltfloader", "lottie"]
+        .iter()
+        .any(|marker| lower.contains(marker));
+    if !has_media {
+        missing.push("real media or 3D: an <img>/<video>/<canvas> element or a three.js/Polyfork (createAsset) import");
+    }
     if missing.is_empty() {
         None
     } else {
