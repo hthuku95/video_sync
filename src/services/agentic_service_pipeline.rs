@@ -1646,7 +1646,7 @@ That tool delegates to another agent. For a full-stack deliverable you MUST call
 ### 1. MAIN VIDEO (AUDIO-FIRST — the narration is the clock)
 - generate_video_script(topic, duration, style, tone) — split into scenes ~20-25s each, one short narration line per scene
 - generate_narration(lines=[<one per scene>], voice="Emma", output_file="{output_dir}/narration.mp3", gap_seconds=0.35) — AUDIO-FIRST: returns the exact SCENE_TIMELINE_JSON for the whole video. NEVER use add_voiceover_to_video or generate_text_to_speech for the video narration
-- Render each scene to EXACTLY its timeline duration: hyperframes_render (FULL HyperFrames feature access; Blender is DISABLED — never call blender_*); manim_execute_script only for data/technical visuals
+- Render each scene to EXACTLY its timeline duration: hyperframes_render (FULL HyperFrames feature access; Blender/Manim are DISABLED — never call blender_* or manim_execute_script); call polyfork_search_assets for 3D set pieces; render data/technical visuals with hyperframes_render (d3/CSS + GSAP)
 - merge_videos the scene clips in narration order, then add_audio(input_file="{output_dir}/merged.mp4", audio_file="{output_dir}/narration.mp3", output_file="{output_dir}/output.mp4")
 - review_video — check quality (includes timestamped AV-sync QA), iterate
 
@@ -1686,7 +1686,7 @@ That tool delegates to another agent. Call rendering tools directly.
 ## MANDATORY TOOL SEQUENCE
 1. generate_video_script(topic, duration, style, tone) — split into scenes ~20-25s each, one short narration line per scene. NARRATION DENSITY: target 70-85% speech coverage (hard floor 60%) — for a scene of T seconds its narration must run ~T*0.6s of speech. Then SELF-CHECK from SCENE_TIMELINE_JSON: (sum of speech / duration) >= 0.6 — if lower, rewrite the lines denser and re-run generate_narration BEFORE rendering.
 2. generate_narration(lines=[<one line per scene>], voice="Emma", output_file="{output_dir}/narration.mp3", gap_seconds=0.35) — AUDIO-FIRST: this call returns the exact SCENE_TIMELINE_JSON that is the clock for the whole video. Call it ONCE with all scene lines; if it errors, fix the arguments and retry once. NEVER use add_voiceover_to_video or generate_text_to_speech for this service.
-3. Render each scene to EXACTLY its timeline duration: hyperframes_render(html=..., resolution=...) — PRIMARY for all scenes (FULL HyperFrames feature access; Blender is DISABLED — never call blender_*). call polyfork_search_assets for real 3D set pieces (buildings, vehicles, products, characters — import createAsset() or the GLB via three.js inside the composition; wait for load before the timeline starts) manim_execute_script only for charts/diagrams/timelines; trim/pad each clip to the exact scene duration.
+3. Render each scene to EXACTLY its timeline duration: hyperframes_render(html=..., resolution=...) — PRIMARY for all scenes (FULL HyperFrames feature access; Blender is DISABLED — never call blender_*). call polyfork_search_assets for real 3D set pieces (buildings, vehicles, products, characters — import createAsset() or the GLB via three.js inside the composition; wait for load before the timeline starts) render charts/diagrams/timelines with hyperframes_render (d3/CSS + GSAP); trim/pad each clip to the exact scene duration.
 4. merge_videos the scene clips in narration order, then add_audio(input_file="{output_dir}/merged.mp4", audio_file="{output_dir}/narration.mp3", output_file="{output_dir}/output.mp4").
 5. review_video(video_path_or_url="{output_dir}/output.mp4", original_request="business_explainer video", expected_features=["audible narration","scene changes stay in sync with narration","no cropped or overflowing text","every scene implements the HyperFrames features named in its plan"]) — this runs the timestamped AV-sync QA; fix ONLY the flagged timestamps if it fails.
 6. submit_final_answer(summary="business_explainer video", output_files=["{output_dir}/output.mp4"])
@@ -1744,7 +1744,39 @@ Save your final video as .mp4 (landscape 16:9 recommended)"#,
             // of truth; the URL, when present, is reference context only.
             base = format!("{}\n\n{}", Self::story_contract_block(input), base);
         }
+        // One universal contract for ALL services — including the ones that
+        // are currently OFF — so enabling any of them later needs no rework.
+        if !base.contains("UNIVERSAL MEDIA QUALITY CONTRACT") {
+            base = format!("{}\n\n{}", base, Self::universal_quality_contract());
+        }
         base
+    }
+
+    /// Applies to every service template, enabled or not. Encodes the
+    /// HyperFrames composition contract, Polyfork 3D, huashu/Bang-Motion
+    /// director rules and the audio-first final-output rule.
+    fn universal_quality_contract() -> &'static str {
+        r#"## UNIVERSAL MEDIA QUALITY CONTRACT (ALL SERVICES — enabled or disabled)
+
+### HyperFrames composition contract (MANDATORY — non-compliant HTML is rejected before render)
+- Build ONE standalone HTML file. Root element: <div data-composition-id="unique_id" data-duration="N"> with width/height:100% (canvas size is data-width/data-height, never hardcode 1920px on the root).
+- EVERY timed scene MUST be an element with class="clip" AND data-start="..." AND data-duration="...". Scenes tile end-to-end on the narration timeline with no gaps or overlaps. Untimed scenes are invisible to the renderer.
+- Register EXACTLY ONE paused timeline: window.__timelines["unique_id"] = gsap.timeline({paused:true}). Animate CHILD nodes with gsap.fromTo (never a CSS initial transform on the same property). The renderer seeks this timeline; root data-duration sets the output length.
+- NEVER use .active CSS class toggles, opacity:0 on untimed scenes, or display/visibility/autoAlpha tweens on a .clip. The framework owns clip visibility. No render-time clocks, unseeded Math.random, network calls or input state — rendering must be deterministic.
+- Media playback is framework-owned: put <img>/<video> inside timed clips with data-start/data-duration; never set crossorigin on media; every <audio> needs an id or the render is silent.
+
+### 3D and Polyfork (use whenever a scene needs 3D or 3D-looking depth)
+- Call polyfork_search_assets BEFORE writing HTML for ANY 3D-looking element (product, building, vehicle, character, terrain, prop). Hotlink the returned module or GLB — import createAsset from 'https://polyfork.dev/cdn/{id}.mjs' or load the GLB with three.js GLTFLoader.
+- Required import map entries: "three" AND "three/addons/" (trailing slash required). Construct the renderer with preserveDrawingBuffer: true. Wait for the model to load BEFORE the timeline starts (seek-safe). Characters carry Idle/Walk/Run clips; tint assets with their returned hex palettes. Hotlinking is allowed; NEVER bulk-download or re-serve the catalog.
+
+### Huashu-art-motion + Bang-Motion director rules (every service)
+- Camera language is punctuation, not decoration: hold when the subject moves; slow pushes for transitions, fast moves for accents only; never three pushes in a row.
+- Shots are 2–6 seconds with ONE concrete object performing ONE concrete action. ONE style and ONE palette per video. Avoid blue-purple/neon AI-slop colours; prefer real materials. End on a hero-object action, not a quote card.
+- One continuous world per scene with a persistent subject; CUT on motion with varied transitions, never fade-out sections; text lives INSIDE the scene world (max 2 levels, >=30px at 1080px width), entries DECELERATE as they land and exits ACCELERATE out, nothing grows from zero, end card <=2s.
+
+### Quality bar and final output
+- Use at least 3 distinct HyperFrames features per video (VFX shaders, Slug kinetic typography, d3 charts, GSAP timelines, Lottie, audio-reactive motion, masks, CSS perspective/parallax). Put the prospect's real hero image/product screenshot in the composition when available. A video that is only text on a flat background is a quality failure.
+- Audio-first: generate_video_script -> generate_narration (timeline is the clock) -> hyperframes_render -> add_audio -> review_video -> submit_final_answer with the .mp4. Never submit narration audio or an image as the final deliverable. Blender and Manim are DISABLED on every service; use HyperFrames for all visuals including equations, charts and diagrams."#
     }
 
     /// Narrative video types that must obey the story contract. Visual-tool
@@ -1819,7 +1851,7 @@ Title: {title}
 Style: {style}
 
 ## ⚠️ CRITICAL: DO NOT USE blender_generate_scene_type or any 3D/Blender tools.
-Use ONLY manim_execute_script for ALL visual content — every render call uploads to R2 automatically.
+Use ONLY hyperframes_render for ALL visual content — every render call uploads to R2 automatically.
 
 ## ⚠️ CRITICAL: DO NOT USE generate_long_form_video
 That tool delegates to another agent and will NOT produce the correct output.
@@ -1827,7 +1859,7 @@ That tool delegates to another agent and will NOT produce the correct output.
 ## MANDATORY TOOL SEQUENCE
 1. generate_video_script(topic="{brief}", duration={duration}, style="{style}", tone="professional") — split into scenes ~20-25s each, one short narration line per scene. NARRATION DENSITY: target 70-85% speech coverage (hard floor 60%) — for a scene of T seconds its narration must run ~T*0.6s of speech. Then SELF-CHECK from SCENE_TIMELINE_JSON: (sum of speech / duration) >= 0.6 — if lower, rewrite the lines denser and re-run generate_narration BEFORE rendering.
 2. generate_narration(lines=[<one line per scene>], voice="Emma", output_file="{out}/narration.mp3", gap_seconds=0.35) — AUDIO-FIRST: this call returns the exact SCENE_TIMELINE_JSON that is the clock for the whole video. Call it ONCE with all scene lines; if it errors, fix the arguments and retry once. NEVER use add_voiceover_to_video or generate_text_to_speech for this service.
-3. Render each scene to EXACTLY its timeline duration: manim_execute_script(description=..., duration=<scene duration>, quality="h", include_narration=false) — for equations, diagrams, step-through animations; trim/pad each clip to the exact scene duration. hyperframes_render (FULL HyperFrames feature access) for title cards and transitions only.
+3. Render each scene to EXACTLY its timeline duration: hyperframes_render(html=..., data-start/data-duration=<scene timeline>, resolution=...) — for equations, diagrams, step-through animations AND all title cards/transitions; use d3/CSS for diagrams and Slug typography for labels. Call polyfork_search_assets for any 3D-looking set piece. Trim/pad each clip to the exact scene duration.
 4. merge_videos the scene clips in narration order, then add_audio(input_file="{out}/merged.mp4", audio_file="{out}/narration.mp3", output_file="{out}/output.mp4").
 5. review_video(video_path_or_url="{out}/output.mp4", original_request="manim explainer {title}", expected_features=["audible narration","scene changes stay in sync with narration","no cropped or overflowing text","every scene implements the HyperFrames features named in its plan"]) — this runs the timestamped AV-sync QA; fix ONLY the flagged timestamps if it fails.
 6. submit_final_answer(summary="manim explainer {title}", output_files=["{out}/output.mp4"])
@@ -1851,7 +1883,7 @@ Title: {title}
 Style: whiteboard, hand-drawn sketch, marker-on-board
 
 ## ⚠️ CRITICAL: DO NOT USE blender_generate_scene_type or any 3D/Blender tools.
-Use ONLY manim_execute_script for ALL visual content — every render call uploads to R2 automatically.
+Use ONLY hyperframes_render for ALL visual content — every render call uploads to R2 automatically.
 
 ## ⚠️ CRITICAL: DO NOT USE generate_long_form_video
 
@@ -1898,7 +1930,7 @@ Title: {title}
 Style: dynamic text animation, word-by-word reveal, kinetic type
 
 ## ⚠️ CRITICAL: DO NOT USE blender_generate_scene_type or any 3D/Blender tools.
-Use ONLY manim_execute_script for ALL visual content — every render call uploads to R2 automatically.
+Use ONLY hyperframes_render for ALL visual content — every render call uploads to R2 automatically.
 
 ## ⚠️ CRITICAL: DO NOT USE generate_long_form_video
 
@@ -1937,7 +1969,7 @@ Title: {title}
 Style: data-driven infographic, animated charts, counters
 
 ## ⚠️ CRITICAL: DO NOT USE blender_generate_scene_type or any 3D/Blender tools.
-Use ONLY manim_execute_script for ALL visual content — every render call uploads to R2 automatically.
+Use ONLY hyperframes_render for ALL visual content — every render call uploads to R2 automatically.
 
 ## ⚠️ CRITICAL: DO NOT USE generate_long_form_video
 
@@ -1976,7 +2008,7 @@ Title: {title}
 Style: algorithm visualization, code execution, data structures
 
 ## ⚠️ CRITICAL: DO NOT USE blender_generate_scene_type or any 3D/Blender tools.
-Use ONLY manim_execute_script for ALL visual content — every render call uploads to R2 automatically.
+Use ONLY hyperframes_render for ALL visual content — every render call uploads to R2 automatically.
 
 ## ⚠️ CRITICAL: DO NOT USE generate_long_form_video
 
@@ -1992,7 +2024,7 @@ Use ONLY manim_execute_script for ALL visual content — every render call uploa
 ## MANDATORY TOOL SEQUENCE
 1. generate_video_script(topic="{brief}", duration={duration}, style="algorithm visualization", tone="educational technical") — split into scenes ~20-25s each, one short narration line per scene. NARRATION DENSITY: target 70-85% speech coverage (hard floor 60%) — for a scene of T seconds its narration must run ~T*0.6s of speech. Then SELF-CHECK from SCENE_TIMELINE_JSON: (sum of speech / duration) >= 0.6 — if lower, rewrite the lines denser and re-run generate_narration BEFORE rendering.
 2. generate_narration(lines=[<one line per scene>], voice="Emma", output_file="{out}/narration.mp3", gap_seconds=0.35) — AUDIO-FIRST: this call returns the exact SCENE_TIMELINE_JSON that is the clock for the whole video. Call it ONCE with all scene lines; if it errors, fix the arguments and retry once. NEVER use add_voiceover_to_video or generate_text_to_speech for this service.
-3. Render each scene to EXACTLY its timeline duration: manim_execute_script(description=..., duration=<scene duration>, quality="h", include_narration=false) — for algorithms, data structures, step-through animations; trim/pad each clip to the exact scene duration. hyperframes_render (FULL HyperFrames feature access) for title cards and transitions only.
+3. Render each scene to EXACTLY its timeline duration: hyperframes_render(html=..., data-start/data-duration=<scene timeline>, resolution=...) — for algorithms, data structures, step-through animations AND all title cards/transitions; use d3/CSS + GSAP for step-through visuals. Call polyfork_search_assets for any 3D-looking set piece. Trim/pad each clip to the exact scene duration.
 4. merge_videos the scene clips in narration order, then add_audio(input_file="{out}/merged.mp4", audio_file="{out}/narration.mp3", output_file="{out}/output.mp4").
 5. review_video(video_path_or_url="{out}/output.mp4", original_request="algorithm visualization {title}", expected_features=["audible narration","scene changes stay in sync with narration","no cropped or overflowing text","every scene implements the HyperFrames features named in its plan"]) — this runs the timestamped AV-sync QA; fix ONLY the flagged timestamps if it fails.
 6. submit_final_answer(summary="algorithm visualization {title}", output_files=["{out}/output.mp4"])
@@ -2015,7 +2047,7 @@ Title: {title}
 Style: professional investor pitch, clean motion graphics, brand presentation
 
 ## ⚠️ CRITICAL: DO NOT USE blender_generate_scene_type or any 3D/Blender tools.
-Use ONLY manim_execute_script for ALL visual content — every render call uploads to R2 automatically.
+Use ONLY hyperframes_render for ALL visual content — every render call uploads to R2 automatically.
 
 ## ⚠️ CRITICAL: DO NOT USE generate_long_form_video
 
@@ -2054,7 +2086,7 @@ Title: {title}
 Style: wrapped-style recap, data-driven highlights, personalized
 
 ## ⚠️ CRITICAL: DO NOT USE blender_generate_scene_type or any 3D/Blender tools.
-Use ONLY manim_execute_script for ALL visual content — every render call uploads to R2 automatically.
+Use ONLY hyperframes_render for ALL visual content — every render call uploads to R2 automatically.
 
 ## ⚠️ CRITICAL: DO NOT USE generate_long_form_video
 
@@ -2094,7 +2126,7 @@ Title: {title}
 Style: isometric 3D perspective, angled view, clean motion graphics
 
 ## ⚠️ CRITICAL: DO NOT USE blender_generate_scene_type or any 3D/Blender tools.
-Use ONLY manim_execute_script for ALL visual content — every render call uploads to R2 automatically.
+Use ONLY hyperframes_render for ALL visual content — every render call uploads to R2 automatically.
 
 ## ⚠️ CRITICAL: DO NOT USE generate_long_form_video
 
@@ -2153,17 +2185,17 @@ async fn generate_execution_plan(
         // directive Nov 13 2026): every plan must reflect how ITS video type
         // is built. Feature narrowing is NOT allowed — every hyperframes_render
         // call has FULL HyperFrames feature access (see the global block above).
-        ServiceType::BusinessExplainer => "generate_video_script, generate_narration (audio-first timing), hyperframes_render (FULL HyperFrames feature access), manim_execute_script (only for charts/timelines), merge_videos, add_audio, review_video, submit_final_answer",
+        ServiceType::BusinessExplainer => "generate_video_script, generate_narration (audio-first timing), polyfork_search_assets (3D set pieces), hyperframes_render (FULL HyperFrames feature access, all charts/timelines), merge_videos, add_audio, review_video, submit_final_answer",
         ServiceType::InvestorPitch => "generate_video_script, generate_narration (audio-first timing), hyperframes_render (FULL HyperFrames feature access), merge_videos, add_audio, review_video, submit_final_answer",
         ServiceType::AnimatedInfographic => "generate_video_script, generate_narration (audio-first timing), hyperframes_render (FULL HyperFrames feature access), merge_videos, add_audio, review_video, submit_final_answer",
         ServiceType::KineticTypography => "generate_video_script, generate_narration (audio-first timing), hyperframes_render ONLY (FULL HyperFrames feature access), merge_videos, add_audio, review_video, submit_final_answer",
         ServiceType::WhiteboardAnimation => "generate_video_script, generate_narration (audio-first timing), hyperframes_render ONLY (FULL HyperFrames feature access), merge_videos, add_audio, review_video, submit_final_answer",
-        ServiceType::ManimExplainer | ServiceType::AlgorithmViz => "generate_video_script, generate_narration (audio-first timing), manim_execute_script (equations, algorithms, data structures, step-through animations), hyperframes_render (FULL HyperFrames feature access), merge_videos, add_audio, review_video, submit_final_answer",
+        ServiceType::ManimExplainer | ServiceType::AlgorithmViz => "generate_video_script, generate_narration (audio-first timing), polyfork_search_assets (3D set pieces), hyperframes_render (FULL HyperFrames feature access — equations, algorithms, data structures, step-through animations via d3/CSS + GSAP), merge_videos, add_audio, review_video, submit_final_answer",
         ServiceType::YearInReview => "generate_video_script, generate_narration (audio-first timing), hyperframes_render (FULL HyperFrames feature access), merge_videos, add_audio, review_video, submit_final_answer",
         ServiceType::IsometricExplainer => "generate_video_script, generate_narration (audio-first timing), hyperframes_render ONLY (FULL HyperFrames feature access; CPU-safe: no GPU tools), merge_videos, add_audio, review_video, submit_final_answer",
-        ServiceType::FullStack | ServiceType::ProductMockup => "generate_video_script, generate_narration (audio-first timing), hyperframes_render (FULL HyperFrames feature access), manim_execute_script (only for technical diagrams), merge_videos, add_audio, review_video, submit_final_answer",
+        ServiceType::FullStack | ServiceType::ProductMockup => "generate_video_script, generate_narration (audio-first timing), polyfork_search_assets (3D set pieces), hyperframes_render (FULL HyperFrames feature access, all technical diagrams), merge_videos, add_audio, review_video, submit_final_answer",
         ServiceType::Thumbnails => "hyperframes_render (static cover frames), submit_final_answer",
-        _ => "generate_video_script, generate_narration (audio-first timing), hyperframes_render (FULL HyperFrames feature access), manim_execute_script (only for math/diagrams), merge_videos, add_audio, review_video, submit_final_answer",
+        _ => "generate_video_script, generate_narration (audio-first timing), polyfork_search_assets (3D set pieces), hyperframes_render (FULL HyperFrames feature access, all math/diagrams), merge_videos, add_audio, review_video, submit_final_answer",
     };
 
     let prompt = format!(

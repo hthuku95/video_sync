@@ -13,6 +13,43 @@ use std::time::Duration;
 use tokio::fs::File;
 use tokio::io::AsyncWriteExt;
 
+/// HyperFrames composition contract gate. The framework ONLY renders timed
+/// elements declared as `class="clip"` with `data-start`/`data-duration`, and
+/// seeks a paused timeline registered at `window.__timelines["<id>"]`. Agents
+/// that write CSS `.active` toggles produce a valid-looking HTML that renders
+/// as a blank background — reject it BEFORE spending a 5-10 minute render.
+fn hyperframes_contract_error(html: &str) -> Option<String> {
+    let mut missing: Vec<&str> = Vec::new();
+    if !html.contains("data-composition-id") {
+        missing.push("root data-composition-id");
+    }
+    if !html.contains("data-duration") {
+        missing.push("root data-duration");
+    }
+    if !html.contains("class=\"clip\"") && !html.contains("class='clip'") {
+        missing.push("at least one class=\"clip\" timed scene");
+    }
+    if !html.contains("data-start") {
+        missing.push("scene data-start");
+    }
+    if !html.contains("window.__timelines") {
+        missing.push("window.__timelines registration of one paused gsap.timeline");
+    }
+    if missing.is_empty() {
+        None
+    } else {
+        Some(format!(
+            "❌ hyperframes_render REJECTED: HTML violates the HyperFrames composition contract (missing: {}). \
+             Build a standalone root <div data-composition-id=\"id\" data-duration=\"N\">; make every scene \
+             <section class=\"clip\" data-start=\"…\" data-duration=\"…\">; register exactly one paused \
+             gsap.timeline at window.__timelines[\"id\"] and animate CHILD nodes with gsap.fromTo. \
+             Do NOT use .active CSS toggles, opacity:0 on untimed scenes, or display/visibility/autoAlpha \
+             tweens on a .clip. Rewrite the HTML and call hyperframes_render again.",
+            missing.join(", ")
+        ))
+    }
+}
+
 /// Short, stable content hash used for content-addressed artifact cache keys.
 /// A workflow may render many different HTML compositions (one per scene);
 /// caching by stage alone would return scene 1 for every subsequent scene.
@@ -22327,6 +22364,9 @@ async fn execute_hyperframes_render_with_state_claude(
     if html.trim().is_empty() {
         return "❌ Error: html (complete standalone composition) is required".to_string();
     }
+    if let Some(error) = hyperframes_contract_error(html) {
+        return error;
+    }
     let resolution = args.get("resolution").and_then(|v| v.as_str());
 
     // CONTENT-ADDRESSED IDEMPOTENCY: a workflow can render MANY compositions
@@ -22479,6 +22519,9 @@ async fn execute_hyperframes_render_with_state_gemini(
     let html = args.get("html").and_then(|v| v.as_str()).unwrap_or("");
     if html.trim().is_empty() {
         return "❌ Error: html (complete standalone composition) is required".to_string();
+    }
+    if let Some(error) = hyperframes_contract_error(html) {
+        return error;
     }
     let resolution = args.get("resolution").and_then(|v| v.as_str());
 
