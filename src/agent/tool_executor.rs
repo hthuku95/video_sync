@@ -134,8 +134,9 @@ fn render_budget_exceeded(workflow_id: Option<uuid::Uuid>, html: &str) -> bool {
     let Some(wid) = workflow_id else {
         return false;
     };
-    let clips = html.matches("class=\"clip\"").count().max(3);
-    let limit = (clips + 2).min(20);
+    // One composition render per planned scene is plenty; a hard ceiling of 6
+    // ends the observed 10-50 render loops before they waste an hour.
+    let limit = 6usize;
     let mut map = match RENDER_BUDGET.lock() {
         Ok(m) => m,
         Err(_) => return false,
