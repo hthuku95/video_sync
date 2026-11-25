@@ -8,10 +8,143 @@ use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::path::Path;
 use std::process::Command as StdCommand;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Duration;
 use tokio::fs::File;
 use tokio::io::AsyncWriteExt;
+
+/// Mechanically repair a model-authored composition so it satisfies the
+/// HyperFrames *technical* contract. This does NOT generate visuals, layouts or
+/// templates: every creative decision stays in the model's HTML/CSS/JS. We only
+/// add the framework plumbing (root ids/duration, clip classes and timings, a
+/// paused timeline registry) that the model routinely forgets.
+fn normalize_hyperframes_html(html: &str, workflow_id: Option<uuid::Uuid>) -> String {
+    let id = workflow_id
+        .map(|w| format!("hf_{}", short_hash(&w.to_string())))
+        .unwrap_or_else(|| format!("hf_{}", short_hash(html)));
+
+    // Root duration: prefer an explicit value, otherwise the longest scene
+    // duration, otherwise a safe default. Never alters the authored visuals.
+    let mut duration = 0.0_f64;
+    for part in html.split("data-duration=\"").skip(1) {
+        if let Some(end) = part.find('"') {
+            if let Ok(v) = part[..end].parse::<f64>() {
+                duration = duration.max(v);
+            }
+        }
+    }
+    if duration <= 0.0 {
+        duration = 30.0;
+    }
+    let duration_s = format!("{duration:.3}");
+
+    let mut out = html.to_string();
+
+    // 1. Root element: first element after <body>, or the first <div>.
+    let body_end = out.to_ascii_lowercase().find("<body").and_then(|p| {
+        out[p..]
+            .find('>')
+            .map(|e| p + e + 1)
+    });
+    let root_start = body_end
+        .and_then(|p| out[p..].find('<').map(|r| p + r))
+        .or_else(|| out.find("<div"));
+    if let Some(rs) = root_start {
+        if let Some(re) = out[rs..].find('>').map(|e| rs + e) {
+            let tag = out[rs..=re].to_string();
+            let mut fixed = tag.clone();
+            if !fixed.contains("data-composition-id") {
+                fixed = fixed.replace('>', &format!(" data-composition-id=\"{id}\">"));
+            }
+            if !fixed.contains("data-duration") {
+                fixed = fixed.replace('>', &format!(" data-duration=\"{duration_s}\">"));
+            }
+            if let Some(sp) = fixed.find("style=\"") {
+                let insert = sp + "style=\"".len();
+                fixed.insert_str(insert, "width:100%;height:100%;");
+            } else {
+                fixed = fixed.replace('>', " style=\"width:100%;height:100%\">");
+            }
+            out.replace_range(rs..=re, &fixed);
+        }
+    }
+
+    // 2. Timed scenes: tag model-authored scene/slide elements as clips and
+    // assign even timings only where the model omitted them.
+    let scene_count = {
+        let lower = out.to_ascii_lowercase();
+        lower.matches("class=\"scene").count()
+            + lower.matches("class=\"slide").count()
+            + lower.matches("class=\"clip").count()
+            + lower.matches("class='scene").count()
+    }
+    .max(1);
+    let segment = duration / scene_count as f64;
+    let mut index = 0usize;
+    let mut search = 0usize;
+    while let Some(rel) = out[search..].to_ascii_lowercase().find("class=\"scene")
+        .or_else(|| out[search..].to_ascii_lowercase().find("class=\"slide"))
+        .or_else(|| out[search..].to_ascii_lowercase().find("class=\"clip"))
+    {
+        let start = search + rel;
+        let Some(tag_end_rel) = out[start..].find('>') else { break };
+        let tag_end = start + tag_end_rel;
+        let mut tag = out[start..=tag_end].to_string();
+        if !tag.contains("clip") {
+            if let Some(cq) = tag.find("class=\"") {
+                tag.insert_str(cq + "class=\"".len(), "clip ");
+            }
+        }
+        if !tag.contains("data-start") {
+            let s = (index as f64 * segment).max(0.0);
+            tag = tag.replace('>', &format!(" data-start=\"{s:.3}\">"));
+        }
+        if !tag.contains("data-duration") {
+            tag = tag.replace('>', &format!(" data-duration=\"{segment:.3}\">"));
+        }
+        out.replace_range(start..=tag_end, &tag);
+        index += 1;
+        search = start + tag.len();
+        if index >= scene_count + 4 {
+            break;
+        }
+    }
+
+    // 3. Timeline registry: HyperFrames seeks this paused GSAP timeline. The
+    // model's own GSAP animations are untouched; this only registers them.
+    if !out.contains("window.__timelines") {
+        let script = format!(
+            "<script>if(window.gsap){{window.__timelines=window.__timelines||{{}};window.__timelines[\"{id}\"]=gsap.timeline({{paused:true}});}}</script>"
+        );
+        if let Some(pos) = out.to_ascii_lowercase().rfind("</body>") {
+            out.insert_str(pos, &script);
+        } else {
+            out.push_str(&script);
+        }
+    }
+    out
+}
+
+/// Bounded render budget per workflow. Prevents the 50+ render loops observed
+/// when `review_video` keeps rejecting otherwise usable frames.
+static RENDER_BUDGET: LazyLock<Mutex<HashMap<uuid::Uuid, (usize, usize)>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+fn render_budget_exceeded(workflow_id: Option<uuid::Uuid>, html: &str) -> bool {
+    let Some(wid) = workflow_id else {
+        return false;
+    };
+    let clips = html.matches("class=\"clip\"").count().max(3);
+    let limit = (clips + 2).min(20);
+    let mut map = match RENDER_BUDGET.lock() {
+        Ok(m) => m,
+        Err(_) => return false,
+    };
+    let entry = map.entry(wid).or_insert((0, limit));
+    entry.1 = entry.1.max(limit);
+    entry.0 += 1;
+    entry.0 > entry.1
+}
 
 /// HyperFrames composition contract gate. The framework ONLY renders timed
 /// elements declared as `class="clip"` with `data-start`/`data-duration`, and
@@ -22486,11 +22619,13 @@ async fn execute_hyperframes_render_with_state_claude(
     if html.trim().is_empty() {
         return "❌ Error: html (complete standalone composition) is required".to_string();
     }
-    if let Some(error) = hyperframes_contract_error(html) {
+    // Repair only the framework plumbing; ALL visuals stay model-authored.
+    let html = normalize_hyperframes_html(html, ctx.workflow_id);
+    if let Some(error) = hyperframes_contract_error(&html) {
         return error;
     }
     // Owner policy: every media asset must be stored in a cloud bucket.
-    let html = cloudify_composition_media(html, ctx).await;
+    let html = cloudify_composition_media(&html, ctx).await;
     let resolution = args.get("resolution").and_then(|v| v.as_str());
 
     // CONTENT-ADDRESSED IDEMPOTENCY: a workflow can render MANY compositions
@@ -22541,6 +22676,12 @@ async fn execute_hyperframes_render_with_state_claude(
             crate::hyperframes_client::HyperFramesClient::new(base_url)
         }
     };
+    if render_budget_exceeded(ctx.workflow_id, &html) {
+        return "RENDER_BUDGET_EXCEEDED: you have used the maximum renders for this workflow. \
+                Do NOT call hyperframes_render again. Use the most recent rendered video URL, \
+                call add_audio with narration if needed, then submit_final_answer with the .mp4 now."
+            .to_string();
+    }
     match client.render_html(&html, resolution, filename, 1800).await {
         Ok(local_path) => {
             match crate::cloud_storage::upload_local_file_to_cloud(
@@ -22644,11 +22785,13 @@ async fn execute_hyperframes_render_with_state_gemini(
     if html.trim().is_empty() {
         return "❌ Error: html (complete standalone composition) is required".to_string();
     }
-    if let Some(error) = hyperframes_contract_error(html) {
+    // Repair only the framework plumbing; ALL visuals stay model-authored.
+    let html = normalize_hyperframes_html(html, ctx.workflow_id);
+    if let Some(error) = hyperframes_contract_error(&html) {
         return error;
     }
     // Owner policy: every media asset must be stored in a cloud bucket.
-    let html = cloudify_composition_media(html, ctx).await;
+    let html = cloudify_composition_media(&html, ctx).await;
     let resolution = args.get("resolution").and_then(|v| v.as_str());
 
     // Content-addressed cache (see Claude twin): one cache entry per distinct
@@ -22684,6 +22827,12 @@ async fn execute_hyperframes_render_with_state_gemini(
             crate::hyperframes_client::HyperFramesClient::new(base_url)
         }
     };
+    if render_budget_exceeded(ctx.workflow_id, &html) {
+        return "RENDER_BUDGET_EXCEEDED: you have used the maximum renders for this workflow. \
+                Do NOT call hyperframes_render again. Use the most recent rendered video URL, \
+                call add_audio with narration if needed, then submit_final_answer with the .mp4 now."
+            .to_string();
+    }
     match client.render_html(&html, resolution, filename, 1800).await {
         Ok(local_path) => {
             match crate::cloud_storage::upload_local_file_to_cloud(
