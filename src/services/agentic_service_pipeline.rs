@@ -1208,6 +1208,14 @@ impl AgenticServicePipeline {
                 }
             }
 
+            // Hard blocker: a video with a valid stream but literally no
+            // changing pixels (one flat colour) is NOT a deliverable. The
+            // dead-frame QA gate is soft-degrading, so enforce at publish too.
+            if let Some(msg) = flat_video_reject(&final_path) {
+                tracing::error!("publish_output: {}", msg);
+                return Err(msg);
+            }
+
             let (backend, url) = storage
                 .upload_file_tracked(&final_path, &output_key)
                 .await
@@ -1759,7 +1767,7 @@ Save your final video as .mp4 (landscape 16:9 recommended)"#,
         r#"## UNIVERSAL MEDIA QUALITY CONTRACT (ALL SERVICES — enabled or disabled)
 
 ### HyperFrames composition contract (MANDATORY — non-compliant HTML is rejected before render)
-- Build ONE standalone HTML file. Root element: <div data-composition-id="unique_id" data-duration="N"> with width/height:100% (canvas size is data-width/data-height, never hardcode 1920px on the root).
+- Call hyperframes_render with `composition` (PREFERRED): supply YOUR OWN global_css, palette, timeline_js (seekable GSAP, use __COMPOSITION_ID__ where needed) and scenes[{start,duration,html,css,media}]. You author every visual detail — the server only wraps your fragments in the required root/clip/timeline envelope. There are NO templates and NO preset layouts. The legacy `html` argument is supported as a fallback only.
 - EVERY timed scene MUST be an element with class="clip" AND data-start="..." AND data-duration="...". Scenes tile end-to-end on the narration timeline with no gaps or overlaps. Untimed scenes are invisible to the renderer.
 - Register EXACTLY ONE paused timeline: window.__timelines["unique_id"] = gsap.timeline({paused:true}). Animate CHILD nodes with gsap.fromTo (never a CSS initial transform on the same property). The renderer seeks this timeline; root data-duration sets the output length.
 - NEVER use .active CSS class toggles, opacity:0 on untimed scenes, or display/visibility/autoAlpha tweens on a .clip. The framework owns clip visibility. No render-time clocks, unseeded Math.random, network calls or input state — rendering must be deterministic.
@@ -2539,6 +2547,37 @@ fn cleanup_stale_downloads(max_age: std::time::Duration) {
             let _ = std::fs::remove_file(entry.path());
         }
     }
+}
+
+/// Reject a "video" whose sampled frames are all the same luminance — the
+/// failure signature seen when a HyperFrames composition rendered nothing.
+fn flat_video_reject(path: &str) -> Option<String> {
+    let output = std::process::Command::new("ffmpeg")
+        .args([
+            "-v", "error", "-i", path,
+            "-vf", "fps=2,signalstats,metadata=print:key=lavfi.signalstats.YAVG:file=-",
+            "-an", "-f", "null", "-",
+        ])
+        .output()
+        .ok()?;
+    let text = String::from_utf8_lossy(&output.stdout);
+    let values: Vec<f64> = text
+        .lines()
+        .filter_map(|line| line.trim().strip_prefix("lavfi.signalstats.YAVG="))
+        .filter_map(|v| v.parse::<f64>().ok())
+        .collect();
+    if values.len() < 4 {
+        return None; // short clip or probe failed — other validators handle it
+    }
+    let min = values.iter().copied().fold(f64::INFINITY, f64::min);
+    let max = values.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+    if max - min < 1.0 {
+        return Some(format!(
+            "ARTIFACT_INVALID: final video is a flat {min:.1}-luminance frame with no changing visuals ({} sampled frames) — re-render the composition",
+            values.len()
+        ));
+    }
+    None
 }
 
 /// Newest audio file in a directory (mp3/wav/m4a/aac/ogg).

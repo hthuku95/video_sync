@@ -23,6 +23,9 @@ pub struct CraftReport {
     /// longest run of consecutive ~zero-motion frames, in seconds
     pub max_dead_run_seconds: f64,
     pub fps_sampled: f64,
+    /// True when essentially every sampled frame is identical (solid colour
+    /// with audio) — a render that produced no visuals at all.
+    pub flat_video: bool,
 }
 
 impl CraftReport {
@@ -32,13 +35,16 @@ impl CraftReport {
             end_hold_seconds: 0.0,
             max_dead_run_seconds: 0.0,
             fps_sampled: 0.0,
+            flat_video: false,
         }
     }
 
     /// A completed audit with a dead-frame run >2.5s or end hold >4s fails.
     pub fn hard_fail(&self) -> bool {
         self.skipped_reason.is_none()
-            && (self.max_dead_run_seconds > 2.5 || self.end_hold_seconds > 4.0)
+            && (self.flat_video
+                || self.max_dead_run_seconds > 2.5
+                || self.end_hold_seconds > 4.0)
     }
 
     pub fn render_markdown(&self) -> String {
@@ -57,6 +63,9 @@ impl CraftReport {
                 "✅"
             }
         ));
+        if self.flat_video {
+            out.push_str("  • ❌ FAIL (G4): the whole video is one flat colour — no visuals were rendered\n");
+        }
         out.push_str(&format!(
             "  • End-hold check (G3): final hold {:.1}s — {}\n",
             self.end_hold_seconds,
@@ -81,6 +90,9 @@ impl CraftReport {
                 "a {:.1}s run of completely static frames exists — keep background/camera/text idle motion alive on every frame (breathing drift, grain, subtle parallax)",
                 self.max_dead_run_seconds
             ));
+        }
+        if self.flat_video {
+            items.push("the entire video is a flat colour — rebuild the composition with real timed clips and media".to_string());
         }
         if self.end_hold_seconds > 4.0 {
             items.push(format!(
@@ -108,9 +120,11 @@ pub async fn verify_craft(video_path: &PathBuf) -> CraftReport {
 
 fn run_craft_qa(video: &PathBuf) -> Result<CraftReport, String> {
     use std::process::Command;
-    const FPS: f64 = 4.0;
-    const W: u32 = 64;
-    const H: u32 = 36;
+    // Sample twice as often and at twice the resolution: enough to catch
+    // short static gaps and single-colour renders that 4fps/64x36 missed.
+    const FPS: f64 = 8.0;
+    const W: u32 = 128;
+    const H: u32 = 72;
 
     let out = Command::new("ffmpeg")
         .args([
@@ -177,10 +191,14 @@ fn run_craft_qa(video: &PathBuf) -> Result<CraftReport, String> {
         .take_while(|d| **d < FLAT_THRESHOLD)
         .count();
 
+    let duration = n_frames as f64 / FPS;
+    let flat_video = duration > 3.0 && max_run as f64 / FPS > duration * 0.9;
+
     Ok(CraftReport {
         skipped_reason: None,
         end_hold_seconds: end_flat as f64 / FPS,
         max_dead_run_seconds: max_run as f64 / FPS,
         fps_sampled: FPS,
+        flat_video,
     })
 }

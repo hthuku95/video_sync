@@ -13,6 +13,73 @@ use std::time::Duration;
 use tokio::fs::File;
 use tokio::io::AsyncWriteExt;
 
+/// Assemble a HyperFrames document from LLM-authored *fragments*. The model
+/// supplies its own CSS, scene HTML and GSAP timeline JS; this function only
+/// places them in the technical envelope HyperFrames requires. It makes NO
+/// visual decisions — no templates, no fixed layouts, no preset archetypes.
+fn assemble_composition(comp: &Value, wid: Option<uuid::Uuid>) -> Result<String, String> {
+    let id = wid
+        .map(|w| format!("hf_{}", short_hash(&w.to_string())))
+        .unwrap_or_else(|| format!("hf_{}", short_hash(&comp.to_string())));
+    let duration = comp
+        .get("duration")
+        .and_then(|v| v.as_f64())
+        .filter(|v| *v >= 1.0 && *v <= 600.0)
+        .unwrap_or(30.0);
+    let scenes = comp
+        .get("scenes")
+        .and_then(|v| v.as_array())
+        .ok_or_else(|| "❌ composition.scenes must be an array".to_string())?;
+    if scenes.is_empty() {
+        return Err("❌ composition.scenes must contain at least one scene".to_string());
+    }
+    let global_css = comp
+        .get("global_css")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let timeline_js = comp
+        .get("timeline_js")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let bg = comp
+        .get("palette")
+        .and_then(|p| p.get("bg"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("#0B0B0F");
+    let segment = duration / scenes.len() as f64;
+
+    let mut html = format!(
+        "<!DOCTYPE html><html><head><meta charset=\"utf-8\"><style>html,body{{margin:0;width:100%;height:100%;background:{bg}}}#composition-root{{width:100%;height:100%;position:relative}}{global_css}</style></head><body><div id=\"composition-root\" data-composition-id=\"{id}\" data-duration=\"{duration:.3}\">"
+    );
+    for (index, scene) in scenes.iter().enumerate() {
+        let markup = scene
+            .get("html")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| format!("❌ composition.scenes[{index}].html is required"))?;
+        let css = scene
+            .get("css")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let start = scene
+            .get("start")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(index as f64 * segment);
+        let scene_duration = scene
+            .get("duration")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(segment);
+        html.push_str(&format!(
+            "<style>{css}</style><div class=\"clip\" data-start=\"{start:.3}\" data-duration=\"{scene_duration:.3}\" style=\"position:absolute;inset:0\">{markup}</div>"
+        ));
+    }
+    html.push_str("<script>");
+    html.push_str(&timeline_js.replace("__COMPOSITION_ID__", &id));
+    html.push_str(&format!(
+        "window.__timelines=window.__timelines||{{}};if(!window.__timelines[\"{id}\"]){{window.__timelines[\"{id}\"]=(typeof tl!=='undefined'?tl:gsap.timeline({{paused:true}}));}}</script></body></html>"
+    ));
+    Ok(html)
+}
+
 /// Mechanically repair a model-authored composition so it satisfies the
 /// HyperFrames *technical* contract. This does NOT generate visuals, layouts or
 /// templates: every creative decision stays in the model's HTML/CSS/JS. We only
@@ -127,24 +194,35 @@ fn normalize_hyperframes_html(html: &str, workflow_id: Option<uuid::Uuid>) -> St
 
 /// Bounded render budget per workflow. Prevents the 50+ render loops observed
 /// when `review_video` keeps rejecting otherwise usable frames.
-static RENDER_BUDGET: LazyLock<Mutex<HashMap<uuid::Uuid, (usize, usize)>>> =
+static RENDER_BUDGET: LazyLock<Mutex<HashMap<(uuid::Uuid, i64), usize>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
-fn render_budget_exceeded(workflow_id: Option<uuid::Uuid>, html: &str) -> bool {
-    let Some(wid) = workflow_id else {
+async fn render_budget_exceeded(ctx: &ToolExecutionContext, html: &str) -> bool {
+    let Some(wid) = ctx.workflow_id else {
         return false;
     };
-    // One composition render per planned scene is plenty; a hard ceiling of 6
-    // ends the observed 10-50 render loops before they waste an hour.
+    // Scope the budget to the current pipeline attempt. The pipeline records
+    // an "Attempt N of 5" event per retry, so a QA-rejected render gets a fresh
+    // budget on the next attempt and can actually be repaired.
+    let attempt: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM app_workflow_events
+          WHERE workflow_id = $1 AND message LIKE 'Attempt % of %'",
+    )
+    .bind(wid)
+    .fetch_one(&ctx.app_state.db_pool)
+    .await
+    .unwrap_or(1)
+    .max(1);
+    let _ = html; // clip count removed: one composition render per scene is enough
+    // Hard ceiling of 6 real renders per attempt ends the observed 10-50 loops.
     let limit = 6usize;
     let mut map = match RENDER_BUDGET.lock() {
         Ok(m) => m,
         Err(_) => return false,
     };
-    let entry = map.entry(wid).or_insert((0, limit));
-    entry.1 = entry.1.max(limit);
-    entry.0 += 1;
-    entry.0 > entry.1
+    let used = map.entry((wid, attempt)).or_insert(0);
+    *used += 1;
+    *used > limit
 }
 
 /// HyperFrames composition contract gate. The framework ONLY renders timed
@@ -22616,9 +22694,20 @@ async fn execute_hyperframes_render_with_state_claude(
 ) -> String {
     let force_regen = args.get("force_regenerate").and_then(|v| v.as_bool()).unwrap_or(false);
 
-    let html = args.get("html").and_then(|v| v.as_str()).unwrap_or("");
+    let mut composed = String::new();
+    let html = if let Some(comp) = args.get("composition").filter(|v| v.is_object()) {
+        match assemble_composition(comp, ctx.workflow_id) {
+            Ok(document) => {
+                composed = document;
+                composed.as_str()
+            }
+            Err(error) => return error,
+        }
+    } else {
+        args.get("html").and_then(|v| v.as_str()).unwrap_or("")
+    };
     if html.trim().is_empty() {
-        return "❌ Error: html (complete standalone composition) is required".to_string();
+        return "❌ Error: provide either composition (LLM-authored fragments) or html (standalone composition)".to_string();
     }
     // Repair only the framework plumbing; ALL visuals stay model-authored.
     let html = normalize_hyperframes_html(html, ctx.workflow_id);
@@ -22677,7 +22766,7 @@ async fn execute_hyperframes_render_with_state_claude(
             crate::hyperframes_client::HyperFramesClient::new(base_url)
         }
     };
-    if render_budget_exceeded(ctx.workflow_id, &html) {
+    if render_budget_exceeded(ctx, &html).await {
         return "RENDER_BUDGET_EXCEEDED: you have used the maximum renders for this workflow. \
                 Do NOT call hyperframes_render again. Use the most recent rendered video URL, \
                 call add_audio with narration if needed, then submit_final_answer with the .mp4 now."
@@ -22782,9 +22871,20 @@ async fn execute_hyperframes_render_with_state_gemini(
     ctx: &ToolExecutionContext,
 ) -> String {
     let force_regen = args.get("force_regenerate").and_then(|v| v.as_bool()).unwrap_or(false);
-    let html = args.get("html").and_then(|v| v.as_str()).unwrap_or("");
+    let mut composed = String::new();
+    let html = if let Some(comp) = args.get("composition").filter(|v| v.is_object()) {
+        match assemble_composition(comp, ctx.workflow_id) {
+            Ok(document) => {
+                composed = document;
+                composed.as_str()
+            }
+            Err(error) => return error,
+        }
+    } else {
+        args.get("html").and_then(|v| v.as_str()).unwrap_or("")
+    };
     if html.trim().is_empty() {
-        return "❌ Error: html (complete standalone composition) is required".to_string();
+        return "❌ Error: provide either composition (LLM-authored fragments) or html (standalone composition)".to_string();
     }
     // Repair only the framework plumbing; ALL visuals stay model-authored.
     let html = normalize_hyperframes_html(html, ctx.workflow_id);
@@ -22828,7 +22928,7 @@ async fn execute_hyperframes_render_with_state_gemini(
             crate::hyperframes_client::HyperFramesClient::new(base_url)
         }
     };
-    if render_budget_exceeded(ctx.workflow_id, &html) {
+    if render_budget_exceeded(ctx, &html).await {
         return "RENDER_BUDGET_EXCEEDED: you have used the maximum renders for this workflow. \
                 Do NOT call hyperframes_render again. Use the most recent rendered video URL, \
                 call add_audio with narration if needed, then submit_final_answer with the .mp4 now."
