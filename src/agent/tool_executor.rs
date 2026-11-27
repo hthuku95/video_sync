@@ -5444,12 +5444,17 @@ async fn reject_audio_only_final<S: AsRef<str>>(
     files: &[S],
 ) -> Option<String> {
     let has_audio = files.iter().any(|f| {
-        let ext = std::path::Path::new(f.as_ref())
+        // Cloud URLs carry a presigned query string; Path::extension() on
+        // "...narration.mp3?X-Amz-..." returns "mp3?X-Amz-...", so the old
+        // check silently let audio-only finals through. Strip ?/# first.
+        let raw = f.as_ref();
+        let without_query = raw.split(['?', '#']).next().unwrap_or(raw);
+        let ext = std::path::Path::new(without_query)
             .extension()
             .and_then(|e| e.to_str())
             .unwrap_or("")
             .to_ascii_lowercase();
-        matches!(ext.as_str(), "mp3" | "wav" | "aac" | "m4a")
+        matches!(ext.as_str(), "mp3" | "wav" | "aac" | "m4a" | "ogg")
     });
     if !has_audio {
         return None;
