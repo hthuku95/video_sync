@@ -1804,6 +1804,7 @@ Save your final video as .mp4 (landscape 16:9 recommended)"#,
         r#"## UNIVERSAL MEDIA QUALITY CONTRACT (ALL SERVICES — enabled or disabled)
 
 ### HyperFrames composition contract (MANDATORY — non-compliant HTML is rejected before render)
+- BEFORE your first hyperframes_render call, call load_skill(id="hyperframes-core") and read it. For product/site videos also load "product-launch-video"; for animation/3D also load "hyperframes-animation" and "media-use". These are real skills loaded on demand — using them is required, not optional.
 - Call hyperframes_render with `composition` (PREFERRED): supply YOUR OWN global_css, palette, timeline_js (seekable GSAP, use __COMPOSITION_ID__ where needed) and scenes[{start,duration,html,css,media}]. You author every visual detail — the server only wraps your fragments in the required root/clip/timeline envelope. There are NO templates and NO preset layouts. The legacy `html` argument is supported as a fallback only.
 - EVERY timed scene MUST be an element with class="clip" AND data-start="..." AND data-duration="...". Scenes tile end-to-end on the narration timeline with no gaps or overlaps. Untimed scenes are invisible to the renderer.
 - Register EXACTLY ONE paused timeline: window.__timelines["unique_id"] = gsap.timeline({paused:true}). Animate CHILD nodes with gsap.fromTo (never a CSS initial transform on the same property). The renderer seeks this timeline; root data-duration sets the output length.
