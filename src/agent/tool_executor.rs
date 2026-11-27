@@ -68,9 +68,15 @@ fn assemble_composition(comp: &Value, wid: Option<uuid::Uuid>) -> Result<String,
             .get("duration")
             .and_then(|v| v.as_f64())
             .unwrap_or(segment);
-        html.push_str(&format!(
-            "<style>{css}</style><div class=\"clip\" data-start=\"{start:.3}\" data-duration=\"{scene_duration:.3}\" style=\"position:absolute;inset:0\">{markup}</div>"
-        ));
+        let already_clipped = markup.contains("class=\"clip\"") || markup.contains("class='clip'");
+        if already_clipped {
+            // The model already authored a timed clip — do not nest clips.
+            html.push_str(&format!("<style>{css}</style>{markup}"));
+        } else {
+            html.push_str(&format!(
+                "<style>{css}</style><div class=\"clip\" data-start=\"{start:.3}\" data-duration=\"{scene_duration:.3}\" style=\"position:absolute;inset:0\">{markup}</div>"
+            ));
+        }
     }
     html.push_str("<script>");
     html.push_str(&timeline_js.replace("__COMPOSITION_ID__", &id));
@@ -1254,6 +1260,81 @@ async fn finalize_special_tool_result_gemini(
 }
 
 /// Execute a tool with full context - saves outputs to DB and vectorizes them
+/// Shared handler for the skill meta-tools (progressive disclosure).
+async fn execute_skill_tool(
+    name: &str,
+    args: &Value,
+    ctx: &ToolExecutionContext,
+) -> Option<String> {
+    match name {
+        "list_skills" => {
+            let mut out = String::from("Available skills (call load_skill with the exact id):\n");
+            for skill in crate::services::skill_registry::discover_file_skills() {
+                out.push_str(&format!("- {}: {}\n", skill.id, skill.description));
+            }
+            if let Ok(learned) = crate::services::skills::get_relevant_skills(
+                &ctx.app_state.db_pool, None, None, ctx.user_id, 20,
+            )
+            .await
+            {
+                for skill in learned {
+                    out.push_str(&format!(
+                        "- learned:{}: {}\n",
+                        skill.id,
+                        skill.description.unwrap_or_default()
+                    ));
+                }
+            }
+            Some(out)
+        }
+        "load_skill" => {
+            let id = args.get("id").and_then(|v| v.as_str()).unwrap_or("");
+            Some(
+                match crate::services::skill_registry::load_skill(id, &ctx.app_state.db_pool).await {
+                    Ok(body) => format!("## Skill {id}\n\n{body}"),
+                    Err(error) => format!("❌ {error}"),
+                },
+            )
+        }
+        "search_skills" => {
+            let query = args.get("query").and_then(|v| v.as_str()).unwrap_or("");
+            let service_type = args.get("service_type").and_then(|v| v.as_str());
+            let limit = args
+                .get("limit")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(5)
+                .min(20) as usize;
+            Some(
+                match crate::services::skill_registry::search_learned_skills(
+                    &ctx.app_state.db_pool,
+                    ctx.app_state.qdrant_client.as_ref(),
+                    service_type,
+                    ctx.user_id,
+                    query,
+                    limit,
+                )
+                .await
+                {
+                    Ok(list) => {
+                        let mut out = String::from("## Matching learned skills\n");
+                        for skill in list {
+                            out.push_str(&format!(
+                                "- **{}** (id {}): {}\n",
+                                skill.name,
+                                skill.id,
+                                skill.description.unwrap_or_default()
+                            ));
+                        }
+                        out
+                    }
+                    Err(error) => format!("❌ Skill search failed: {error}"),
+                },
+            )
+        }
+        _ => None,
+    }
+}
+
 pub async fn execute_tool_claude_with_context(
     name: &str,
     args: &Value,
@@ -1288,6 +1369,9 @@ async fn execute_tool_claude_with_context_inner(
     // calls die here in milliseconds instead of hanging to the workflow cap.
     if let Some(denied) = service_tool_deny(name, ctx).await {
         return denied;
+    }
+    if let Some(result) = execute_skill_tool(name, args, ctx).await {
+        return result;
     }
     // Handle special tools that need AppState access
     if name == "view_video" {
@@ -1574,6 +1658,9 @@ async fn execute_tool_gemini_with_context_inner(
     // Hard deny-list (same guard as the Claude arm).
     if let Some(denied) = service_tool_deny(name, ctx).await {
         return denied;
+    }
+    if let Some(result) = execute_skill_tool(name, &serde_json::to_value(args).unwrap_or_default(), ctx).await {
+        return result;
     }
     // Handle special tools that need AppState access
     if name == "view_video" {

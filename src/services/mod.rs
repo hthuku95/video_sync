@@ -19,6 +19,7 @@ pub mod pipeline_worker;
 pub mod redis_pubsub;
 pub mod service_flags;
 pub mod skills;
+pub mod skill_registry;
 pub mod token_pricing;
 pub mod token_usage;
 pub mod kick_mapper;

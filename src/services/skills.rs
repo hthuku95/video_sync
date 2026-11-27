@@ -170,6 +170,37 @@ pub async fn get_relevant_skills(
     Ok(skills)
 }
 
+/// Fetch one learned skill by id (used by the skill registry's `load_skill`).
+pub async fn get_skill_by_id(pool: &sqlx::PgPool, id: Uuid) -> Result<Option<Skill>, String> {
+    let row = sqlx::query_as::<_, (
+        Uuid, Option<i32>, Option<String>, Option<Uuid>, String, Option<String>,
+        serde_json::Value, serde_json::Value, String, Option<serde_json::Value>,
+        i32, String, Option<i32>, Option<String>,
+        chrono::DateTime<chrono::Utc>, chrono::DateTime<chrono::Utc>,
+    )>(
+        "SELECT id, user_id, service_type, campaign_id, name, description, \
+                trigger_conditions, tool_sequence, source, correction, \
+                success_count, scope, restricted_to_user_id, qdrant_point_id, \
+                created_at, updated_at \
+         FROM skills WHERE id = $1",
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| format!("Failed to load skill: {e}"))?;
+    Ok(row.map(|(
+        id, user_id, service_type, campaign_id, name, description,
+        trigger_conditions, tool_sequence, source, correction,
+        success_count, scope, restricted_to_user_id, qdrant_point_id,
+        created_at, updated_at,
+    )| Skill {
+        id, user_id, service_type, campaign_id, name, description,
+        trigger_conditions, tool_sequence, source, correction,
+        success_count, scope, restricted_to_user_id, qdrant_point_id,
+        created_at, updated_at,
+    }))
+}
+
 /// Format skills into an injectable context string for the agent prompt.
 pub fn format_skills_context(skills: &[Skill]) -> String {
     if skills.is_empty() {

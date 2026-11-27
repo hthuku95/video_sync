@@ -243,7 +243,7 @@ impl HyperFramesClient {
                 "name": name,
                 "data": base64::engine::general_purpose::STANDARD.encode(&bytes),
             }));
-            out.replace_range(start..end, &format!("media/{name}"));
+            out.replace_range(start..end, &format!("assets/{name}"));
         }
         (out, media)
     }

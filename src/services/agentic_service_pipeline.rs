@@ -492,6 +492,43 @@ impl AgenticServicePipeline {
             }
         };
         let mut agent_prompt = Self::build_agent_prompt(service_type, &input, &output_dir);
+
+        // Progressive-disclosure skill catalogue + lessons from past renders.
+        // The model can call load_skill(id) for any of these; the full bodies
+        // are NOT injected here, keeping context small.
+        let skill_catalog = crate::services::skill_registry::catalog_text(
+            &state.db_pool,
+            Some(service_type.as_str()),
+            input.user_id,
+        )
+        .await;
+        if !skill_catalog.is_empty() {
+            agent_prompt = format!("{skill_catalog}\n\n{agent_prompt}");
+        }
+        if let Ok(learned) = crate::services::skill_registry::search_learned_skills(
+            &state.db_pool,
+            state.qdrant_client.as_ref(),
+            Some(service_type.as_str()),
+            input.user_id,
+            &input.brief,
+            5,
+        )
+        .await
+        {
+            if !learned.is_empty() {
+                let mut block = String::from("## LESSONS LEARNED FROM PAST RENDERS\nApply these unless the brief explicitly overrides them:\n");
+                for skill in learned {
+                    block.push_str(&format!(
+                        "- **{}** (id {}): {}\n",
+                        skill.name,
+                        skill.id,
+                        skill.description.unwrap_or_default()
+                    ));
+                }
+                agent_prompt = format!("{block}\n{agent_prompt}");
+            }
+        }
+
         match &execution_plan {
             Ok(plan) if !plan.trim().is_empty() => {
                 let _ = runtime

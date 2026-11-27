@@ -103,6 +103,9 @@ impl ToolRegistry {
                     crate::gemini_client::GeminiClient::create_video_editing_tools();
                 declarations.push(Self::long_form_video_tool());
                 declarations.push(Self::clip_compilation_tool());
+                declarations.push(Self::list_skills_tool());
+                declarations.push(Self::load_skill_tool());
+                declarations.push(Self::search_skills_tool());
                 let contract = Self::completion_contract(profile);
                 let mandatory: BTreeSet<&str> =
                     contract.mandatory_tool_names.iter().copied().collect();
@@ -499,6 +502,60 @@ impl ToolRegistry {
                 param_type: "object".to_string(),
                 properties,
                 required: vec!["source_url".to_string()],
+            },
+        }
+    }
+
+    fn list_skills_tool() -> FunctionDeclaration {
+        FunctionDeclaration {
+            name: "list_skills".to_string(),
+            description: "List available skills (vendored HyperFrames skills and learned lessons from past renders). Use this when you need to know which skills can be loaded.".to_string(),
+            parameters: Parameters {
+                param_type: "object".to_string(),
+                properties: HashMap::new(),
+                required: Vec::new(),
+            },
+        }
+    }
+
+    fn load_skill_tool() -> FunctionDeclaration {
+        let mut props = HashMap::new();
+        props.insert(
+            "id".to_string(),
+            gemini_property("string", "Exact skill id from list_skills, e.g. 'hyperframes-core' or a learned-skill UUID."),
+        );
+        FunctionDeclaration {
+            name: "load_skill".to_string(),
+            description: "Load the full instructions of one skill into context. Use when the task matches a skill's description — read it BEFORE authoring a HyperFrames composition.".to_string(),
+            parameters: Parameters {
+                param_type: "object".to_string(),
+                properties: props,
+                required: vec!["id".to_string()],
+            },
+        }
+    }
+
+    fn search_skills_tool() -> FunctionDeclaration {
+        let mut props = HashMap::new();
+        props.insert(
+            "query".to_string(),
+            gemini_property("string", "What you want to learn from past work, e.g. 'landing page scene with product screenshot'."),
+        );
+        props.insert(
+            "service_type".to_string(),
+            gemini_property("string", "Optional service scope filter (landing_page, education, ...)."),
+        );
+        props.insert(
+            "limit".to_string(),
+            gemini_property("number", "Maximum number of learned skills to return (default 5)."),
+        );
+        FunctionDeclaration {
+            name: "search_skills".to_string(),
+            description: "Search learned skills (lessons from successful renders and user corrections) for the current service. Use before starting a render to reuse proven patterns.".to_string(),
+            parameters: Parameters {
+                param_type: "object".to_string(),
+                properties: props,
+                required: vec!["query".to_string()],
             },
         }
     }
