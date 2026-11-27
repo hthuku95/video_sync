@@ -249,7 +249,7 @@ pub fn tool_discovery_enabled() -> bool {
 /// (set_chat_title / submit_final_answer) and search_tools are added separately.
 fn service_tool_names(scope: &str) -> Option<Vec<&'static str>> {
     let normalized = scope.trim().to_ascii_lowercase();
-    let names: Vec<&'static str> = match normalized.as_str() {
+    let mut names: Vec<&'static str> = match normalized.as_str() {
         "clipping" | "kick_auto_clipper" => vec![
             "generate_clip_compilation",
             "download_asset",
@@ -383,6 +383,9 @@ fn service_tool_names(scope: &str) -> Option<Vec<&'static str>> {
         "voice_audio" => vec!["generate_text_to_speech", "generate_music"],
         _ => return None,
     };
+    // Skill tools are available in EVERY service scope — they are harness
+    // meta-tools, not service-specific capabilities.
+    names.extend(["list_skills", "load_skill", "search_skills"]);
     Some(names)
 }
 
