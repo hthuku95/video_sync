@@ -1260,6 +1260,30 @@ async fn finalize_special_tool_result_gemini(
 }
 
 /// Execute a tool with full context - saves outputs to DB and vectorizes them
+/// Skills loaded during the current workflow. `hyperframes_render` refuses
+/// to run until the HyperFrames core skill has been read, so the contract is
+/// enforced rather than merely suggested in a very long prompt.
+static LOADED_SKILLS: LazyLock<Mutex<HashMap<uuid::Uuid, std::collections::HashSet<String>>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+fn mark_skill_loaded(workflow_id: Option<uuid::Uuid>, id: &str) {
+    if let (Some(wid), Ok(mut map)) = (workflow_id, LOADED_SKILLS.lock()) {
+        map.entry(wid)
+            .or_insert_with(std::collections::HashSet::new)
+            .insert(id.to_string());
+    }
+}
+
+fn core_skill_loaded(workflow_id: Option<uuid::Uuid>) -> bool {
+    match (workflow_id, LOADED_SKILLS.lock()) {
+        (Some(wid), Ok(map)) => map
+            .get(&wid)
+            .map(|skills| skills.contains("hyperframes-core"))
+            .unwrap_or(false),
+        _ => false,
+    }
+}
+
 /// Shared handler for the skill meta-tools (progressive disclosure).
 async fn execute_skill_tool(
     name: &str,
@@ -1291,7 +1315,10 @@ async fn execute_skill_tool(
             let id = args.get("id").and_then(|v| v.as_str()).unwrap_or("");
             Some(
                 match crate::services::skill_registry::load_skill(id, &ctx.app_state.db_pool).await {
-                    Ok(body) => format!("## Skill {id}\n\n{body}"),
+                    Ok(body) => {
+                        mark_skill_loaded(ctx.workflow_id, id);
+                        format!("## Skill {id}\n\n{body}")
+                    }
                     Err(error) => format!("❌ {error}"),
                 },
             )
@@ -22796,6 +22823,9 @@ async fn execute_hyperframes_render_with_state_claude(
     if html.trim().is_empty() {
         return "❌ Error: provide either composition (LLM-authored fragments) or html (standalone composition)".to_string();
     }
+    if !core_skill_loaded(ctx.workflow_id) {
+        return "❌ MANDATORY: call load_skill(id=\"hyperframes-core\") and read it BEFORE your first hyperframes_render. Do not render until you have loaded the core skill.".to_string();
+    }
     // Repair only the framework plumbing; ALL visuals stay model-authored.
     let html = normalize_hyperframes_html(html, ctx.workflow_id);
     if let Some(error) = hyperframes_contract_error(&html) {
@@ -22972,6 +23002,9 @@ async fn execute_hyperframes_render_with_state_gemini(
     };
     if html.trim().is_empty() {
         return "❌ Error: provide either composition (LLM-authored fragments) or html (standalone composition)".to_string();
+    }
+    if !core_skill_loaded(ctx.workflow_id) {
+        return "❌ MANDATORY: call load_skill(id=\"hyperframes-core\") and read it BEFORE your first hyperframes_render. Do not render until you have loaded the core skill.".to_string();
     }
     // Repair only the framework plumbing; ALL visuals stay model-authored.
     let html = normalize_hyperframes_html(html, ctx.workflow_id);
