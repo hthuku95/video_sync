@@ -700,42 +700,38 @@ impl AgenticServicePipeline {
                 .await;
             // Dropping progress_tx closes the channel, stopping progress_task
 
-            let produced = match locate_output_from_result(&agent_result, &output_dir) {
+            // Deterministic finalization: the agent's claimed final answer is
+            // NOT trusted. Use the newest VALID video this run actually
+            // produced. Only when none exists do we fall back to the old
+            // text/registry locator.
+            let produced = match deterministic_video_output(&output_dir, workflow_id, &state.db_pool).await {
                 Some(loc) => Some(loc),
-                None => {
-                    // The agent does not always restate the artifact URL in its
-                    // final prose (it can simply say "uploaded"). Every upload
-                    // is registered against the workflow, so fall back to the
-                    // newest artifact instead of declaring the attempt empty
-                    // after it actually produced and uploaded the file.
-                    let wanted_kind = if service_type == ServiceType::Thumbnails {
-                        "image"
-                    } else {
-                        "video"
-                    };
-                    let recovered: Option<String> = sqlx::query_scalar(
-                        "SELECT public_url FROM generated_artifacts \
-                          WHERE workflow_id = $1 AND kind = $2 AND public_url IS NOT NULL \
-                            AND COALESCE(bytes, 0) >= 50000 \
-                          ORDER BY created_at DESC LIMIT 1",
-                    )
-                    .bind(workflow_id)
-                    .bind(wanted_kind)
-                    .fetch_optional(&state.db_pool)
-                    .await
-                    .ok()
-                    .flatten();
-
-                    if let Some(url) = &recovered {
-                        tracing::info!(
-                            "📍 Output located from artifact registry (agent did not restate it): {url}"
-                        );
+                None => match locate_output_from_result(&agent_result, &output_dir) {
+                    Some(loc) => Some(loc),
+                    None => {
+                        let wanted_kind = if service_type == ServiceType::Thumbnails {
+                            "image"
+                        } else {
+                            "video"
+                        };
+                        let recovered: Option<String> = sqlx::query_scalar(
+                            "SELECT public_url FROM generated_artifacts \
+                              WHERE workflow_id = $1 AND kind = $2 AND public_url IS NOT NULL \
+                                AND COALESCE(bytes, 0) >= 50000 \
+                              ORDER BY created_at DESC LIMIT 1",
+                        )
+                        .bind(workflow_id)
+                        .bind(wanted_kind)
+                        .fetch_optional(&state.db_pool)
+                        .await
+                        .ok()
+                        .flatten();
+                        recovered.map(|canonical| LocatedOutput {
+                            canonical,
+                            review_path: None,
+                        })
                     }
-                    recovered.map(|canonical| LocatedOutput {
-                        canonical,
-                        review_path: None,
-                    })
-                }
+                },
             };
             retries_used = attempt as i32;
             // Evidence capture for terminal diagnosability.
@@ -2589,6 +2585,154 @@ fn cleanup_stale_downloads(max_age: std::time::Duration) {
 
 /// Reject a "video" whose sampled frames are all the same luminance — the
 /// failure signature seen when a HyperFrames composition rendered nothing.
+/// Pick the best video actually produced by this run, ignoring whichever file
+/// the model *claims* is final. Local files and registered artifacts are
+/// sorted newest-first and validated (streams, duration, non-flat) before one
+/// is handed to QA and publish. Returns None only when nothing usable exists.
+async fn deterministic_video_output(
+    output_dir: &str,
+    workflow_id: uuid::Uuid,
+    pool: &sqlx::PgPool,
+) -> Option<LocatedOutput> {
+    let mut candidates: Vec<String> = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(output_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let ext = path
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("")
+                .to_ascii_lowercase();
+            if !matches!(ext.as_str(), "mp4" | "webm" | "mov" | "mkv") {
+                continue;
+            }
+            if std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0) < 50_000 {
+                continue;
+            }
+            candidates.push(path.to_string_lossy().to_string());
+        }
+    }
+    // Prefer a composed final file over an intermediate scene/clip/visual,
+    // then newest-first. This prevents a stray scene with an audio track from
+    // winning over the actual finished video.
+    candidates.sort_by(|a, b| {
+        let name_a = std::path::Path::new(a)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        let name_b = std::path::Path::new(b)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        let rank = |name: &str| {
+            if name.contains("output") || name.contains("final") || name.contains("with_audio") {
+                1
+            } else {
+                0
+            }
+        };
+        let ma = std::fs::metadata(a).and_then(|m| m.modified()).ok();
+        let mb = std::fs::metadata(b).and_then(|m| m.modified()).ok();
+        rank(&name_b)
+            .cmp(&rank(&name_a))
+            .then_with(|| mb.cmp(&ma))
+    });
+
+    if let Ok(rows) = sqlx::query_as::<_, (Option<String>, Option<String>)>(
+        "SELECT file_path, public_url FROM generated_artifacts
+          WHERE workflow_id = $1 AND kind = 'video'
+          ORDER BY created_at DESC LIMIT 12",
+    )
+    .bind(workflow_id)
+    .fetch_all(pool)
+    .await
+    {
+        for (file_path, public_url) in rows {
+            if let Some(path) = file_path {
+                if std::path::Path::new(&path).exists() {
+                    candidates.push(path);
+                }
+            }
+            if let Some(url) = public_url {
+                if let Some(local) = crate::cloud_storage::lookup_local_artifact(&url) {
+                    candidates.push(local);
+                }
+            }
+        }
+    }
+
+    // The narration timeline is the source of truth for the intended length.
+    // Reject drafts that are far shorter/longer than the spoken script.
+    let expected_duration: Option<f64> = sqlx::query_scalar(
+        "SELECT (metadata->>'duration_seconds')::float8
+           FROM workflow_artifacts
+          WHERE workflow_id = $1 AND stage LIKE 'narration%'
+          ORDER BY updated_at DESC LIMIT 1",
+    )
+    .bind(workflow_id)
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten();
+
+    let mut seen = std::collections::HashSet::new();
+    for path in candidates {
+        if !seen.insert(path.clone()) {
+            continue;
+        }
+        let meta = match crate::core::analyze_video(&path) {
+            Ok(meta) => meta,
+            Err(_) => continue,
+        };
+        if !meta.has_video
+            || !meta.has_audio
+            || meta.duration_seconds < 3.0
+            || flat_video_reject(&path).is_some()
+        {
+            continue;
+        }
+        if let Some(expected) = expected_duration {
+            if (meta.duration_seconds - expected).abs() > expected * 0.25 + 2.0 {
+                tracing::warn!(
+                    workflow_id = %workflow_id,
+                    path = %path,
+                    duration = meta.duration_seconds,
+                    expected,
+                    "deterministic selector rejected candidate with wrong duration"
+                );
+                continue;
+            }
+        }
+        tracing::info!(
+            workflow_id = %workflow_id,
+            "🎯 deterministic final output selected: {path}"
+        );
+        // Auditable decision record — inspect via the workflow events endpoint.
+        let details = json!({
+            "path": path,
+            "duration_seconds": meta.duration_seconds,
+            "expected_duration_seconds": expected_duration,
+            "bytes": std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0),
+        });
+        let _ = sqlx::query(
+            "INSERT INTO app_workflow_events (workflow_id, event_type, message, details)
+             VALUES ($1, 'output_selected', $2, $3)",
+        )
+        .bind(workflow_id)
+        .bind(format!("Deterministic final output selected: {path}"))
+        .bind(details)
+        .execute(pool)
+        .await;
+        return Some(LocatedOutput {
+            canonical: path.clone(),
+            review_path: Some(path),
+        });
+    }
+    None
+}
+
 fn flat_video_reject(path: &str) -> Option<String> {
     let output = std::process::Command::new("ffmpeg")
         .args([
